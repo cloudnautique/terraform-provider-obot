@@ -31,9 +31,9 @@ jobs:
           terraform_version: '1.14.0'
           terraform_wrapper: false
       - name: Check local authentication and instance isolation
-        run: make obot-smoke OBOT_REF="${{ matrix.obot }}" OBOT_INSTANCES=2
+        run: make test-smoke OBOT_REF="${{ matrix.obot }}" OBOT_INSTANCES=2
       - name: Run Terraform acceptance tests
-        run: make testacc-local OBOT_REF="${{ matrix.obot }}" OBOT_INSTANCES=2
+        run: make test-acceptance-fresh OBOT_REF="${{ matrix.obot }}" OBOT_INSTANCES=2
       - name: Show sanitized failure logs
         if: failure()
         run: |

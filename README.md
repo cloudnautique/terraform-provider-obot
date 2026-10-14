@@ -138,7 +138,7 @@ use the test helper command above for the named local instance.
 For headless tests, run a child command with credentials prepared automatically:
 
 ```shell
-python3 scripts/obot.py exec dev -- make testacc
+make test-acceptance
 ```
 
 The helper signs in with local auth, creates an API-scoped seed key, and runs
@@ -150,7 +150,7 @@ Add users as tests need them:
 
 ```shell
 python3 scripts/obot.py user-add dev test_obot_user@example.com --role basic
-python3 scripts/obot.py exec dev --email test_obot_user@example.com -- make testacc
+python3 scripts/obot.py exec dev --email test_obot_user@example.com -- make test-acceptance-env
 ```
 
 Additional users use the same test password. Available roles are `basic`,
@@ -176,20 +176,35 @@ volume.
 
 ## Run tests
 
+Run `make help` to see the commands. The three usual choices are:
+
+| Command | Obot instance | Authentication and cleanup |
+| --- | --- | --- |
+| `make test` | None | Runs Go and Python unit tests; always disables acceptance tests |
+| `make test-acceptance` | Existing `dev` instance | Logs in automatically; leaves the instance running |
+| `make test-acceptance-fresh` | Creates fresh instances | Logs in automatically; removes the instances afterward |
+
 ```shell
 make test
-make test-tooling
-make obot-smoke OBOT_REF=main OBOT_INSTANCES=2
-make testacc-local OBOT_REF=main OBOT_INSTANCES=2
-make testacc-local OBOT_REF=v0.26.3 OBOT_INSTANCES=2
+make test-acceptance
+make test-acceptance OBOT_INSTANCE=release
+make test-acceptance-fresh OBOT_REF=main OBOT_INSTANCES=2
+make test-acceptance-fresh OBOT_REF=v0.26.3 OBOT_INSTANCES=2
 ```
 
-Unit tests need no Obot instance. The smoke suite checks Owner and Basic-user
-login, denied administrative access for Basic users, and isolation between
-instances. With multiple instances it also runs a Terraform plan with the
+Choose individual acceptance tests with
+`TESTARGS='-run=TestAccCurrentUser_basic'` on any acceptance target.
+An existing instance must first have been created with `make obot-up` or
+`scripts/obot.py up`; its saved metadata supplies the URL and owner email.
+For an external instance, set `OBOT_BASE_URL`, `OBOT_TOKEN`, and
+`OBOT_TEST_EMAIL`, then run `make test-acceptance-env`.
+
+`make test-smoke OBOT_INSTANCES=2` creates fresh instances and checks Owner
+and Basic-user login, denied administrative access for Basic users, and
+isolation between instances. With multiple instances it also runs a Terraform plan with the
 compiled provider and aliases, checking each server's distinct identity.
 
-The local acceptance runner prepares the matching CLI, starts fresh
+The fresh acceptance runner prepares the matching CLI, starts fresh
 instances, runs Terraform acceptance tests, and removes the instances.
 Use `python3 scripts/obot.py testacc --ref main --instances 2 --keep` to
 preserve them for diagnosis. Both runners save sanitized logs on failure.
@@ -197,8 +212,16 @@ A custom test command can follow `--`.
 
 Tests receive `OBOT_BASE_URL`, `OBOT_TOKEN`, `OBOT_TEST_EMAIL`, `TF_ACC=1`,
 and `OBOT_TEST_INSTANCES` (a JSON array of named connections). Tokens are not
-written to instance metadata. Existing test instances can be used with
-`scripts/obot.py exec`; externally configured acceptance runs use `make testacc`.
+written to instance metadata.
+
+Inside Discobox, Make puts Go module/build and lint caches under ignored
+`.obot/cache/` on the workspace disk. This avoids the shared cache volume,
+which can fill independently of the workspace. Explicit `GOMODCACHE`,
+`GOCACHE`, and `GOLANGCI_LINT_CACHE` settings still take precedence.
+Outside Discobox, the tools keep their normal cache defaults.
+
+The older `testacc`, `testacc-local`, and `obot-smoke` targets remain aliases
+for `test-acceptance-env`, `test-acceptance-fresh`, and `test-smoke`.
 
 The in-process HashiCorp acceptance harness does not isolate provider aliases;
 the multi-instance acceptance test uses separate factory names. The compiled

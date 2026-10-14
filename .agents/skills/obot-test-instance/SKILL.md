@@ -20,6 +20,13 @@ python3 scripts/obot.py down dev
 python3 scripts/obot.py down comparison
 ```
 
+For tests, prefer the Make targets: `make test` runs all unit tests without
+Obot; `make test-acceptance OBOT_INSTANCE=dev` authenticates against an existing
+named instance and leaves it running; `make test-acceptance-fresh` creates and
+removes fresh instances. Use `OBOT_INSTANCES=2` with the fresh target to cover
+multiple instances, and `OBOT_REF=v0.26.3` to select a release. `make help`
+lists the targets. Make also provides workspace-local Go caches in Discobox.
+
 Use distinct names for simultaneous instances. Ports are chosen automatically;
 use `--port` for a fixed port. Both main and tags use published Docker images.
 Use `--image` to test a custom image. Startup reports the actual image ID and

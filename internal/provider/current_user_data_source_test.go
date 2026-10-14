@@ -25,7 +25,7 @@ func testAccPreCheck(t *testing.T) {
 	t.Helper()
 	for _, key := range []string{"OBOT_BASE_URL", "OBOT_TOKEN", "OBOT_TEST_EMAIL"} {
 		if os.Getenv(key) == "" {
-			t.Fatalf("%s must be set; use make testacc-local for an isolated instance", key)
+			t.Fatalf("%s must be set; use make test-acceptance for an existing test instance or make test-acceptance-fresh to create one", key)
 		}
 	}
 }
@@ -70,7 +70,7 @@ func TestAccCurrentUser_multipleInstances(t *testing.T) {
 	}
 	connections := os.Getenv("OBOT_TEST_INSTANCES")
 	if connections == "" {
-		t.Skip("OBOT_TEST_INSTANCES was not supplied; use OBOT_INSTANCES=2 with make testacc-local")
+		t.Skip("OBOT_TEST_INSTANCES was not supplied; use OBOT_INSTANCES=2 with make test-acceptance-fresh")
 	}
 	if err := json.Unmarshal([]byte(connections), &instances); err != nil {
 		t.Fatal("OBOT_TEST_INSTANCES must contain JSON connection records")
