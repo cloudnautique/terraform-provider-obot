@@ -1,4 +1,6 @@
 # Build and release output.
+/.obot/
+__pycache__/
 /bin/
 /dist/
 /terraform-provider-obot
