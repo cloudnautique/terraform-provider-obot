@@ -1,0 +1,25 @@
+# Build and release output.
+/bin/
+/dist/
+/terraform-provider-obot
+*.exe
+*.dll
+*.test
+
+# Checkout-specific Terraform CLI configuration.
+/dev.tfrc
+
+# Local Terraform data and state.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+
+# Editor and OS files.
+.DS_Store
+.idea/
+*.iml
+*.swp
+*~
