@@ -423,6 +423,38 @@ def environment_for(states, email=None):
     return environment
 
 
+def terraform(name, action, arguments):
+    state = load(name)
+    config = ROOT / "dev.tfrc"
+    if not config.is_file():
+        raise SetupError("Run make dev first to build and configure the local provider")
+    environment = environment_for([state])
+    directory = CACHE / "terraform" / name
+    directory.mkdir(parents=True, exist_ok=True)
+    # Run each instance in its own root directory so Terraform's default local
+    # state path is isolated. Link configuration so edits remain visible.
+    example = ROOT / "examples" / "dev"
+    suffixes = (".tf", ".tf.json", ".tfvars", ".tfvars.json")
+    files = {path.name: path for path in example.iterdir()
+             if path.is_file() and path.name.endswith(suffixes)}
+    for path in directory.iterdir():
+        if path.is_symlink() and path.name.endswith(suffixes) and path.name not in files:
+            path.unlink()
+    for filename, source_path in files.items():
+        destination = directory / filename
+        if destination.is_symlink():
+            destination.unlink()
+        destination.symlink_to(source_path)
+    environment["TF_CLI_CONFIG_FILE"] = str(config)
+    environment["TF_DATA_DIR"] = str(directory / ".terraform")
+    command = ["terraform", f"-chdir={directory}"]
+    command.extend(["plan", "-destroy"] if action == "plan-destroy" else [action])
+    command.extend(arguments)
+    note(f"{name}: terraform {action}; state in {directory}")
+    # Inherit the terminal so apply/destroy retain Terraform's approval prompt.
+    return subprocess.run(command, env=environment).returncode
+
+
 def smoke(states):
     records = json.loads(environment_for(states)["OBOT_TEST_INSTANCES"])
     for state, record in zip(states, records):
@@ -545,7 +577,7 @@ output "second_email" {
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     child_args = []
-    if argv and argv[0] in ("exec", "testacc") and "--" in argv:
+    if argv and argv[0] in ("exec", "testacc", "terraform") and "--" in argv:
         separator = argv.index("--")
         child_args, argv = argv[separator + 1:], argv[:separator]
     parser = argparse.ArgumentParser(description=__doc__)
@@ -565,6 +597,9 @@ def main(argv=None):
     p.add_argument("--email", default=EMAIL)
     p.add_argument("--image")
     p.add_argument("--docker-socket", default=None)
+    p = sub.add_parser("terraform")
+    p.add_argument("name", type=valid_name)
+    p.add_argument("action", choices=("plan", "apply", "plan-destroy", "destroy"))
     for command in ("down", "status", "logs", "env", "token", "user-add", "exec"):
         p = sub.add_parser(command)
         p.add_argument("name", type=valid_name)
@@ -616,6 +651,8 @@ def main(argv=None):
             parser.error("exec requires a command after --")
         result = subprocess.run(command, env=environment_for([load(args.name)], args.email))
         return result.returncode
+    elif args.command == "terraform":
+        return terraform(args.name, args.action, child_args)
     elif args.command in ("smoke", "testacc"):
         if args.instances < 1:
             parser.error("--instances must be positive")

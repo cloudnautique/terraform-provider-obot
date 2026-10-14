@@ -229,13 +229,43 @@ provider's actual alias behavior is checked separately by the smoke suite.
 
 ## Build and local Terraform development
 
+Use the existing instance's name as the target prefix:
+
+```shell
+make dev-plan
+make dev-apply
+make dev-plan
+make dev-plan-destroy
+make dev-destroy
+```
+
+For an instance named `release`, use `make release-plan`, `make release-apply`,
+and so on. Create the named instance with `make obot-up OBOT_INSTANCE=release`
+first if needed. These targets rebuild the provider, configure its local
+development override, and authenticate automatically without a desktop keyring.
+They leave the Obot Docker instance running.
+
+The shared configuration is `examples/dev/main.tf`, which reads and outputs
+the authenticated user's email. Each instance has independent local Terraform
+state and plugin data under ignored `.obot/terraform/NAME/`. The helper uses
+Terraform's local backend; keep the development example on that backend.
+
+`plan` previews changes. `apply` generates a fresh plan and asks for approval.
+`plan-destroy` runs `terraform plan -destroy` to preview removal; `destroy`
+asks for approval before removing Terraform-managed objects. By default, the
+helpers do not save plan files. The current example only reads a data source,
+so destruction removes its state and output without deleting the Obot user.
+Pass extra Terraform options with `TFARGS`, for example
+`make dev-plan TFARGS=-no-color`.
+
+Lower-level build and configuration commands are also available:
+
 ```shell
 make build
 make lint
 make dev
 export TF_CLI_CONFIG_FILE="$PWD/dev.tfrc"
 terraform -chdir=examples/dev providers schema -json
-terraform -chdir=examples/dev plan
 ```
 
 `make build` writes `bin/terraform-provider-obot`; `make install` installs
@@ -244,11 +274,11 @@ checkout-specific CLI configuration using
 [Terraform development overrides](https://developer.hashicorp.com/terraform/cli/config/config-file#development-overrides-for-provider-developers).
 Re-run it after rebuilding or moving the checkout.
 
-The minimal development example produces an empty plan without connecting.
-Add the current-user data source to exercise an authenticated connection.
-Run development commands directly: `terraform init` still attempts to resolve
-the unpublished provider in the Registry. Terraform's development-override
-warning is expected. `make dev-check` runs the schema and empty-plan checks.
+Skip `terraform init` for this example: it still attempts to resolve the
+unpublished provider in the Registry. Terraform's development-override warning
+is expected. `make dev-check` checks the schema and validates the configuration
+without connecting to Obot. Prefer the named Make targets for plan/apply so
+authentication and Terraform state stay associated with the same instance.
 
 Use `unset TF_CLI_CONFIG_FILE` to return to your normal Terraform settings.
 

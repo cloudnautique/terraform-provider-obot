@@ -4,6 +4,7 @@ OBOT_REF ?= main
 OBOT_INSTANCE ?= dev
 OBOT_INSTANCES ?= 1
 TESTARGS ?=
+TFARGS ?=
 ACCEPTANCE_TEST = go test -count=1 -timeout=60m -run=TestAcc $(TESTARGS) ./internal/provider/...
 
 # Discobox shares the default Go cache volume across sandboxes. Keep this
@@ -26,6 +27,11 @@ help:
 		'make test-acceptance-env        Use OBOT_BASE_URL, OBOT_TOKEN, OBOT_TEST_EMAIL' \
 		'  TESTARGS="-run=TestAccNAME"    Select acceptance tests' \
 		'make obot-up / obot-down        Start / remove named instance (default: dev)' \
+		'make NAME-plan                 Preview Terraform changes against NAME' \
+		'make NAME-apply                Apply changes with a confirmation prompt' \
+		'make NAME-plan-destroy         Preview removal of Terraform-managed objects' \
+		'make NAME-destroy              Remove managed objects with confirmation' \
+		'  Replace NAME with instance name, for example: make dev-plan' \
 		'make build / lint / generate    Build, lint, or regenerate provider docs'
 
 build:
@@ -94,7 +100,21 @@ dev: build
 
 dev-check: dev
 	TF_CLI_CONFIG_FILE="$(CURDIR)/dev.tfrc" terraform -chdir=examples/dev providers schema -json > /dev/null
-	TF_CLI_CONFIG_FILE="$(CURDIR)/dev.tfrc" terraform -chdir=examples/dev plan -input=false
+	TF_CLI_CONFIG_FILE="$(CURDIR)/dev.tfrc" terraform -chdir=examples/dev validate
+
+# The target prefix is the existing Obot instance name. Each uses separate
+# Terraform state while sharing the development example configuration.
+%-plan: dev
+	python3 scripts/obot.py terraform "$*" plan -- $(TFARGS)
+
+%-apply: dev
+	python3 scripts/obot.py terraform "$*" apply -- $(TFARGS)
+
+%-plan-destroy: dev
+	python3 scripts/obot.py terraform "$*" plan-destroy -- $(TFARGS)
+
+%-destroy: dev
+	python3 scripts/obot.py terraform "$*" destroy -- $(TFARGS)
 
 .PHONY: help build install lint generate fmt test test-go test-tooling \
 	test-acceptance test-acceptance-env test-acceptance-fresh test-smoke \

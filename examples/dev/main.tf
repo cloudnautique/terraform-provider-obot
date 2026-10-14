@@ -9,3 +9,9 @@ terraform {
 }
 
 provider "obot" {}
+
+data "obot_current_user" "current" {}
+
+output "current_email" {
+  value = data.obot_current_user.current.email
+}

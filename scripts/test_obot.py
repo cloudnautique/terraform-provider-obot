@@ -187,5 +187,36 @@ class IsolationTests(ToolingTest):
                 obot.valid_ref(ref)
 
 
+class TerraformTests(ToolingTest):
+    def test_named_instances_keep_independent_state_and_override_shell_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "dev.tfrc").touch()
+            example = root / "examples" / "dev"
+            example.mkdir(parents=True)
+            (example / "main.tf").write_text('provider "obot" {}')
+            with patch.object(obot, "ROOT", root), \
+                    patch.object(obot, "CACHE", root / ".obot"), \
+                    patch.object(obot, "load", side_effect=lambda name: {"name": name}), \
+                    patch.object(obot, "environment_for", side_effect=lambda states: {
+                        "OBOT_TOKEN": states[0]["name"] + "-key",
+                        "TF_CLI_CONFIG_FILE": "/wrong/config",
+                        "TF_DATA_DIR": "/wrong/data"}), \
+                    patch.object(obot.subprocess, "run",
+                                 return_value=subprocess.CompletedProcess([], 7)) as run:
+                self.assertEqual(obot.main(["terraform", "dev", "plan", "--", "-no-color"]), 7)
+                self.assertEqual(obot.main(["terraform", "release", "plan-destroy"]), 7)
+            first, second = run.call_args_list
+            for call, name in [(first, "dev"), (second, "release")]:
+                command, environment = call.args[0], call.kwargs["env"]
+                self.assertEqual(command[1], f"-chdir={root / '.obot' / 'terraform' / name}")
+                self.assertEqual((root / ".obot" / "terraform" / name / "main.tf").resolve(), example / "main.tf")
+                self.assertEqual(environment["TF_DATA_DIR"], str(root / ".obot" / "terraform" / name / ".terraform"))
+                self.assertEqual(environment["TF_CLI_CONFIG_FILE"], str(root / "dev.tfrc"))
+                self.assertEqual(environment["OBOT_TOKEN"], name + "-key")
+            self.assertEqual(second.args[0][2:4], ["plan", "-destroy"])
+            self.assertEqual(first.args[0][-1], "-no-color")
+
+
 if __name__ == "__main__":
     unittest.main()

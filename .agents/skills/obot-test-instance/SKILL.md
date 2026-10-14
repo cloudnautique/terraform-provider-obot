@@ -27,6 +27,15 @@ removes fresh instances. Use `OBOT_INSTANCES=2` with the fresh target to cover
 multiple instances, and `OBOT_REF=v0.26.3` to select a release. `make help`
 lists the targets. Make also provides workspace-local Go caches in Discobox.
 
+For manual Terraform use `make NAME-plan`, `make NAME-apply`,
+`make NAME-plan-destroy`, and `make NAME-destroy`, replacing NAME with an
+existing instance name, for example `make dev-plan`. These targets build the
+provider and authenticate automatically. They share `examples/dev` configuration
+and keep separate local state and plugin data in `.obot/terraform/NAME/`.
+Apply/destroy retain the interactive approval prompt; plan-destroy only
+previews deletion. The Docker instance remains running. Pass extra Terraform
+options via `TFARGS`. Keep this development example on the local backend.
+
 Use distinct names for simultaneous instances. Ports are chosen automatically;
 use `--port` for a fixed port. Both main and tags use published Docker images.
 Use `--image` to test a custom image. Startup reports the actual image ID and
