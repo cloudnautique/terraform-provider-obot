@@ -115,11 +115,25 @@ default catalog. No external identity provider or model-provider key is needed.
 
 ```shell
 eval "$(python3 scripts/obot.py env dev)"
-export OBOT_TOKEN="$(obot login --scope api --print-token)"
+OBOT_TOKEN="$(python3 scripts/obot.py token dev)" && export OBOT_TOKEN
 ```
 
-A fresh CLI login opens the browser; sign in using the credentials above and
-complete its device-code prompt. The CLI stores the key in the OS keyring.
+This works in a sandbox or terminal without a desktop keyring. The helper
+signs in with the known local-auth credentials, creates an API-scoped key,
+and invokes `obot login --scope api --print-token` with that key in its
+environment. The assignment captures the token without printing it.
+
+On a desktop with a working OS keyring, you can instead use a fresh
+interactive login:
+
+```shell
+OBOT_TOKEN="$(obot login --scope api --print-token)" && export OBOT_TOKEN
+```
+
+Sign in using the credentials above and complete its device-code prompt.
+The CLI stores the key in the OS keyring. An error mentioning
+`org.freedesktop.secrets` means the Linux Secret Service is unavailable;
+use the test helper command above for the named local instance.
 
 For headless tests, run a child command with credentials prepared automatically:
 

@@ -22,11 +22,14 @@ For an instance created by the test tooling:
 
 ```sh
 eval "$(python3 scripts/obot.py env dev)"
-export OBOT_TOKEN="$(obot login --scope api --print-token)"
+OBOT_TOKEN="$(python3 scripts/obot.py token dev)" && export OBOT_TOKEN
 ```
 
-A fresh interactive login uses the browser and OS keyring. Use the known
-local-auth credentials documented in the root README. For headless tests use
+The token helper uses known local-auth credentials and invokes
+`obot login --scope api --print-token` with an API-scoped seed key. It works
+without a browser or OS keyring. An interactive login without a seed key
+requires a working OS keyring; an `org.freedesktop.secrets` error means the
+Linux Secret Service is unavailable. For headless tests use
 `python3 scripts/obot.py exec dev -- COMMAND...`; the helper logs in through
 local auth, creates an API-scoped seed key, and invokes the same CLI login
 command with that key in its environment. This supports CI without a desktop
