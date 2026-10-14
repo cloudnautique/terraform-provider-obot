@@ -23,6 +23,8 @@ import urllib.request
 import uuid
 import zipfile
 
+import discobox_network
+
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = ROOT / ".obot"
 REPO = "https://github.com/obot-platform/obot.git"
@@ -266,6 +268,10 @@ def start(name, ref, port=0, timeout=180, image=None, email=EMAIL, docker_socket
     docker_socket = docker_socket or os.environ.get("OBOT_TEST_DOCKER_SOCKET", "/var/run/docker.sock")
     if not 0 <= port <= 65535 or timeout <= 0:
         raise SetupError("port must be 0-65535 and timeout must be positive")
+    try:
+        network_arguments = discobox_network.docker_arguments()
+    except discobox_network.BootstrapError as error:
+        raise SetupError(str(error)) from None
     directory = state_path(name).parent
     directory.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -305,6 +311,7 @@ def start(name, ref, port=0, timeout=180, image=None, email=EMAIL, docker_socket
                    "-e", "OBOT_SERVER_DISABLE_UPDATE_CHECK=true"]
         if docker_socket:
             command.extend(["-v", f"{docker_socket}:/var/run/docker.sock"])
+        command.extend(network_arguments)
         command.append(state["image_id"])
         run(command, env=environment)
         wait_for(state, timeout)

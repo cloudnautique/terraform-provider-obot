@@ -17,6 +17,7 @@ endif
 
 help:
 	@printf '%s\n' \
+		'make discobox-bootstrap         Prepare DNS, proxy, and CA trust inside Discobox' \
 		'make test                       Run Go and Python unit tests; no Obot needed' \
 		'make test-acceptance            Run against existing Obot instance dev' \
 		'  OBOT_INSTANCE=NAME            Select another existing instance' \
@@ -37,6 +38,9 @@ help:
 build:
 	mkdir -p bin
 	go build -o bin/terraform-provider-obot .
+
+discobox-bootstrap:
+	python3 scripts/discobox_network.py bootstrap
 
 install:
 	go install .
@@ -116,6 +120,6 @@ dev-check: dev
 %-destroy: dev
 	python3 scripts/obot.py terraform "$*" destroy -- $(TFARGS)
 
-.PHONY: help build install lint generate fmt test test-go test-tooling \
+.PHONY: help discobox-bootstrap build install lint generate fmt test test-go test-tooling \
 	test-acceptance test-acceptance-env test-acceptance-fresh test-smoke \
 	testacc testacc-local obot-smoke dev dev-check obot-source obot-cli obot-up obot-down

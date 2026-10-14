@@ -9,6 +9,17 @@ Run commands from the Terraform provider repository root. Docker must be
 running locally. Test instances use embedded PostgreSQL, loopback ports, a
 separate labeled data volume per instance, and local authentication.
 
+Inside Discobox, first run `make discobox-bootstrap`. Its boot hook lives in
+`.discobox/services/10-bootstrap.sh`. The bootstrap manages a shared DNS and
+proxy forwarding service; the launcher adds matching DNS/proxy/CA settings to
+new containers automatically. Other environments keep their normal networking.
+Existing disposable instances must be recreated after enabling this setup.
+Inspect failures with `journalctl -u obot-discobox-network.service`. It forwards
+through the sandbox's existing proxy and keeps certificate verification enabled.
+The proxy is on a private bridge address, so Discobox containers use
+`OBOT_SERVER_DISALLOW_PRIVATE_IPMCP=false`. Account for that setting when
+designing tests for private-address restrictions.
+
 ```sh
 python3 scripts/obot.py up dev --ref main
 python3 scripts/obot.py up comparison --ref v0.26.3
