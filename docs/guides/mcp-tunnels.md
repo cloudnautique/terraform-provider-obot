@@ -1,0 +1,194 @@
+---
+page_title: "MCP tunnels: creation, import, and token rotation"
+subcategory: ""
+description: |-
+  Manage private MCP tunnel definitions and publish their one-time credentials to a secret manager.
+---
+
+# MCP tunnels
+
+An MCP tunnel definition controls which private destinations an agent may reach.
+An Obot Admin or Owner creates the definition, Terraform captures its one-time
+token, and the agent connects using that token. Creating the definition does
+not wait for an agent: the agent needs the token produced by apply.
+
+`obot_mcp_tunnel` manages the definition and explicit token rotation.
+`data.obot_mcp_tunnel` reads one definition by ID; `data.obot_mcp_tunnels`
+lists definitions sorted by ID. Data sources return metadata and a non-secret
+`token_preview`. Obot stores a digest and preview and cannot return a complete
+token through GET or LIST. A data source cannot recover a token for export.
+
+## Create and publish a token
+
+Configure the Obot provider with an API-scoped key. Configure the AWS or Vault
+provider separately with credentials authorized to write the destination.
+These are module examples; declare the `obot-platform/obot` provider source
+in your root configuration. The Obot provider does not call your secret manager.
+
+For AWS Secrets Manager:
+
+```terraform
+resource "obot_mcp_tunnel" "customer" {
+  display_name           = "Customer private network"
+  allowed_urls           = ["https://mcp.internal.example/mcp"]
+  token_rotation_version = 0
+}
+
+resource "aws_secretsmanager_secret" "tunnel" {
+  name = "obot/customer/mcp-tunnel"
+}
+
+resource "aws_secretsmanager_secret_version" "tunnel" {
+  secret_id     = aws_secretsmanager_secret.tunnel.id
+  secret_string = obot_mcp_tunnel.customer.token
+
+  lifecycle {
+    precondition {
+      condition     = obot_mcp_tunnel.customer.token != null
+      error_message = "The tunnel token is unavailable. Explicitly increase token_rotation_version to rotate and capture a new token before publishing it."
+    }
+  }
+}
+```
+
+For an existing Vault KV v2 mount:
+
+```terraform
+resource "obot_mcp_tunnel" "customer" {
+  display_name           = "Customer private network"
+  allowed_urls           = ["https://mcp.internal.example/mcp"]
+  token_rotation_version = 0
+}
+
+# Configure the Vault provider and an existing KV v2 mount named "secret".
+resource "vault_kv_secret_v2" "tunnel" {
+  mount     = "secret"
+  name      = "obot/customer/mcp-tunnel"
+  data_json = jsonencode({ token = obot_mcp_tunnel.customer.token })
+
+  lifecycle {
+    precondition {
+      condition     = obot_mcp_tunnel.customer.token != null
+      error_message = "The tunnel token is unavailable. Explicitly increase token_rotation_version to rotate and capture a new token before publishing it."
+    }
+  }
+}
+```
+
+See the destination providers' references for
+[AWS secret versions](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/secretsmanager_secret_version)
+and [Vault KV v2 secrets](https://registry.terraform.io/providers/hashicorp/vault/latest/docs/resources/kv_secret_v2).
+Use one destination example per tunnel. Neither destination is exercised by
+the Obot acceptance suite; those integrations need your own accounts and permissions.
+
+Run `terraform plan` and `terraform apply`. After successful publication,
+have the agent retrieve the secret through its own AWS or Vault identity and
+set `OBOT_TUNNEL_TOKEN`. Set `OBOT_BASE_URL` to the Obot application or API URL
+and run `obot tunnel`. This credential is separate from the provider's
+API-scoped `OBOT_TOKEN`; a tunnel token cannot manage Obot resources.
+
+For example, when using the AWS example and AWS CLI:
+
+```shell
+export OBOT_BASE_URL="https://obot.example.com/api"
+export OBOT_TUNNEL_TOKEN="$(aws secretsmanager get-secret-value \
+  --secret-id obot/customer/mcp-tunnel --query SecretString --output text)"
+obot tunnel
+```
+
+Use the tunnel's generated `id` in a remote MCP catalog entry's
+`remoteConfig.tunnelName`. Its `fixedURL` or `hostname` must match
+`allowed_urls`. Catalog-entry management is not implemented by this provider
+yet; configure the reference through Obot's UI or API.
+
+## Import an existing definition
+
+First match the existing display name, description, and allowed URLs in your
+resource configuration. Keep `token_rotation_version` at its baseline of 0.
+Names are not unique: import using the generated ID, never a display name,
+preview, or secret token.
+
+```terraform
+resource "obot_mcp_tunnel" "customer" {
+  display_name = "Customer private network"
+  description  = "Private MCP endpoints reached through the customer's agent"
+  allowed_urls = ["https://mcp.internal.example/mcp"]
+
+  # Increase this value to explicitly rotate and revoke the previous token.
+  token_rotation_version = 0
+}
+```
+
+Use an import block and review the plan before applying:
+
+```terraform
+import {
+  to = obot_mcp_tunnel.customer
+  id = "mt1example"
+}
+```
+
+Alternatively, use CLI import:
+
+```shell
+terraform import obot_mcp_tunnel.customer mt1example
+```
+
+Import reads metadata, initializes the Terraform-local rotation counter to
+zero, and warns that `token` is null. It does not rotate, replace the tunnel,
+or disconnect agents. With matching configuration, the next plan has no changes.
+Refresh and metadata updates preserve this null value. If you want Terraform
+to manage only the definition, keep the existing agent credential and
+secret-manager value under their existing management.
+
+Do not add a token-export resource during initial adoption: its precondition
+must fail while the token is null. After adopting the definition, either
+continue managing the existing credential externally or explicitly rotate
+and publish a new one. Never substitute `token_preview` or an empty string.
+
+## Rotate and recover
+
+Increase `token_rotation_version`, for example from 0 to 1, review the plan,
+and apply. The planned token becomes unknown until apply. The tunnel ID stays
+the same; Obot returns a new token once, immediately revokes the old credential,
+and disconnects its agents. There is no overlap period. The dependent secret
+resource publishes the replacement, then your agents must retrieve it and restart.
+Plan for this interruption. Keep the version unchanged on subsequent applies;
+decreasing it is rejected. Omitting it after raising it resets the configured
+value to zero and is also rejected.
+
+Rotation and publication are separate API operations. If publication fails
+after a successful rotation, the captured token remains in Terraform state.
+Fix the destination and apply again with the same rotation version. If the
+one-time rotation response itself is lost, Obot cannot recover that secret;
+refresh and explicitly rotate again after investigating the failure.
+
+Metadata changes and refresh preserve a captured token while its preview
+matches Obot. If another actor rotates the credential, refresh clears the
+stale token to null and warns. A secret-export precondition then prevents
+overwriting the destination with an invalid credential. Increase the rotation
+version to regain control, or keep the replacement credential externally managed.
+
+Reimporting a tunnel cannot reconstruct either its token or its previous local
+rotation counter. Adoption starts at zero again. Do not reuse a configuration
+with a higher version unless you intend another rotation.
+
+## State and deletion
+
+`token` is sensitive so normal Terraform output redacts it, but the complete
+token remains in state and saved plans. Use a protected backend with access
+controls and encryption. Do not commit state or print tokens in CI logs.
+Writing to AWS or Vault does not remove the Obot token from Terraform state.
+Losing state loses this copy of the one-time token.
+
+An empty `allowed_urls` set denies all destinations. Rules support at most one
+wildcard at the beginning or end. Terraform treats them as a set, so ordering
+does not cause changes. Updates happen in place. Obot rejects narrowing an
+allowlist when existing catalog entries would become invalid, and rejects
+deletion while catalog entries reference the tunnel. Remove those references
+first. A rejected operation retains Terraform state so you can resolve the
+dependency and retry.
+
+`terraform plan -destroy` previews removal; `terraform destroy` performs it.
+Deleting the tunnel invalidates its credential and disconnects agents.
+Removing it externally makes the next apply create a new definition and token.

@@ -3,8 +3,8 @@
 A Terraform provider for Obot, built with the Terraform Plugin Framework.
 
 The provider connects with an API-scoped key and exposes the
-`obot_current_user` data source. Managed resources will follow. It is not yet
-published to the Terraform Registry.
+`obot_current_user`, `obot_mcp_tunnel`, and `obot_mcp_tunnels` data sources,
+plus the `obot_mcp_tunnel` resource. It is not yet published to the Terraform Registry.
 
 ## Requirements
 
@@ -324,78 +324,50 @@ authentication and Terraform state stay associated with the same instance.
 
 Use `unset TF_CLI_CONFIG_FILE` to return to your normal Terraform settings.
 
-## Planned MCP tunnel import behavior
+## MCP tunnels
 
-MCP tunnel resources are not implemented yet. The following records the
-proposed import contract; these commands and attributes are design examples,
-not currently available provider functionality.
-
-Support importing the existing tunnel definition by its generated Obot ID.
-Import adopts the display name, description, and allowed URLs without changing
-the tunnel ID or credential. Existing tunnel clients remain connected.
-
-Obot returns a full token only when creating a tunnel or rotating its secret.
-GET and LIST return a preview, and Obot stores only a digest and preview. An
-import therefore leaves the computed sensitive `token` attribute null and
-populates a separate `token_preview` attribute. The provider must never put a
-preview or an empty placeholder into `token`. This follows the precedent of
-[AWS IAM access-key imports](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_access_key#import),
-which adopt the object while leaving unrecoverable secret attributes unavailable.
-
-For the initial adoption, match the existing tunnel's configuration and use
-the proposed rotation counter's baseline value of zero:
+Use `obot_mcp_tunnel` to define a tunnel and capture its one-time, sensitive
+agent token. `obot_mcp_tunnel` and `obot_mcp_tunnels` data sources return
+metadata and a token preview; Obot cannot recover a full token through reads.
 
 ```hcl
 resource "obot_mcp_tunnel" "customer" {
-  display_name = "Customer private network"
-  allowed_urls = ["https://mcp.internal.example/mcp"]
-
+  display_name           = "Customer private network"
+  allowed_urls           = ["https://mcp.internal.example/mcp"]
   token_rotation_version = 0
-}
-
-import {
-  to = obot_mcp_tunnel.customer
-  id = "mt1example"
 }
 ```
 
-The equivalent CLI form would be:
+Import an existing definition by its generated ID:
 
 ```shell
 terraform import obot_mcp_tunnel.customer mt1example
 ```
 
-Import initializes `token_rotation_version` to zero; it is a provider-managed
-counter, not a version read from Obot. With matching configuration and that
-baseline, subsequent plans must not propose rotation or replacement. Import,
-refresh, and changes to the display name, description, or allowed URLs must
-not call the rotation API merely because `token` is unavailable. The importer
-should issue a clear warning explaining the missing token and recovery options.
+Match its metadata and keep `token_rotation_version = 0` for adoption. Import
+preserves its ID and credential, leaves connected agents alone, and warns
+that `token` is null. It never substitutes a preview. Metadata updates and
+refresh do not rotate the credential. With matching configuration, the next
+plan has no changes.
 
-Customers can keep their current agent and existing secret-manager value
-unchanged while Terraform manages the tunnel definition. To capture a new
-token, explicitly change `token_rotation_version` from zero to one, wire the
-new token into the desired AWS or Vault resource, review the rotation plan,
-and apply. Obot immediately revokes the previous token and disconnects its
-clients; the agents must fetch the replacement secret and restart. Rotation
-and secret-manager publication are separate API operations, not an atomic
-transaction. If publication fails after rotation, retain the successfully
-captured token in Terraform state and retry publication without rotating again.
+Increase `token_rotation_version` to explicitly rotate and capture a new token.
+Obot immediately revokes the previous credential and disconnects its agents;
+update their secret and restart them. If Obot detects an external rotation,
+refresh clears the stale token and warns. Secret-export examples reject a
+null token with a precondition. Sensitive tokens remain in Terraform state;
+use a protected backend.
 
-Secret-export examples must reject an unavailable token with an actionable
-precondition; they must never substitute the preview or an empty string. A
-data source can read tunnel metadata and its preview, but cannot recover the
-token. Keeping a captured token sensitive redacts normal output; it still
-exists in Terraform state and requires an appropriately protected backend.
+The [tunnel guide](docs/guides/mcp-tunnels.md) walks through creation, AWS and
+Vault publication, agent startup, import, rotation, recovery, and deletion.
+See the [resource reference](docs/resources/mcp_tunnel.md) for its schema and
+both import forms. Catalog-entry management is not implemented yet.
 
-Implementation acceptance coverage must verify metadata adoption, a null
-imported token, unchanged ID and credential, continued client connectivity,
-and a no-change plan for matching configuration. Import verification should
-ignore only attributes that cannot be reconstructed (`token` and the local
-rotation counter where applicable); separate assertions must check their
-intended imported values. Additional tests must cover explicit post-import
-rotation, token preservation across refresh and metadata updates, and a clear
-failure when attempting to export an unavailable token.
+Acceptance tests cover creation, metadata changes, empty allowlists, stable
+refresh, explicit rotation, live CLI connectivity and revoked-token rejection,
+CLI and import-block adoption, null-token export rejection, external deletion
+and drift, data-source lookup/listing, invalid inputs, dependency failures,
+and destruction. Unit tests also cover API permission failures, safe error
+redaction, malformed token responses, and partially successful updates.
 
 ## Skills and documentation
 

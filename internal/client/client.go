@@ -6,6 +6,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,6 +28,23 @@ type User struct {
 	ID       string `json:"id"`
 	Email    string `json:"email"`
 	Username string `json:"username"`
+}
+
+// HTTPError identifies API failures without retaining response bodies or secrets.
+type HTTPError struct {
+	Method     string
+	Path       string
+	StatusCode int
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("the Obot API %s %s returned HTTP %d; check configuration, permissions, and object dependencies", e.Method, e.Path, e.StatusCode)
+}
+
+// IsNotFound distinguishes missing objects from authentication and transport failures.
+func IsNotFound(err error) bool {
+	var failure *HTTPError
+	return errors.As(err, &failure) && failure.StatusCode == http.StatusNotFound
 }
 
 // New creates a client accepting an Obot app URL or API base URL.
@@ -82,8 +100,10 @@ func (c *Client) request(ctx context.Context, method, path, body string, result 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("the Obot API %s %s returned HTTP %d; check base_url, token validity, API scope, and user permissions",
-			method, path, resp.StatusCode)
+		return &HTTPError{Method: method, Path: path, StatusCode: resp.StatusCode}
+	}
+	if result == nil {
+		return nil
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(result); err != nil {
 		return fmt.Errorf("decoding Obot %s response: %w", path, err)
