@@ -5,7 +5,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"sort"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -23,8 +22,10 @@ var (
 
 type mcpTunnelDataSource struct {
 	client *client.Client
-	plural bool
 }
+
+// tunnelDataModel is shared by the single tunnel data source and each
+// element of the tunnel list.
 type tunnelDataModel struct {
 	ID           types.String `tfsdk:"id"`
 	DisplayName  types.String `tfsdk:"display_name"`
@@ -32,76 +33,105 @@ type tunnelDataModel struct {
 	AllowedURLs  types.Set    `tfsdk:"allowed_urls"`
 	TokenPreview types.String `tfsdk:"token_preview"`
 }
-type tunnelsDataModel struct {
-	Tunnels types.List `tfsdk:"tunnels"`
+
+func (tunnelDataModel) attrTypes() map[string]attr.Type {
+	return map[string]attr.Type{
+		"id":            types.StringType,
+		"display_name":  types.StringType,
+		"description":   types.StringType,
+		"allowed_urls":  types.SetType{ElemType: types.StringType},
+		"token_preview": types.StringType,
+	}
 }
 
-func newMCPTunnelDataSource() datasource.DataSource  { return &mcpTunnelDataSource{} }
-func newMCPTunnelsDataSource() datasource.DataSource { return &mcpTunnelDataSource{plural: true} }
-func (d *mcpTunnelDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
-	resp.TypeName = req.ProviderTypeName + "_mcp_tunnel"
-	if d.plural {
-		resp.TypeName += "s"
+func newTunnelDataModel(ctx context.Context, tunnel client.Tunnel, diagnostics *diag.Diagnostics) tunnelDataModel {
+	return tunnelDataModel{
+		ID:           types.StringValue(tunnel.ID),
+		DisplayName:  types.StringValue(tunnel.Manifest.DisplayName),
+		Description:  types.StringValue(tunnel.Manifest.Description),
+		AllowedURLs:  allowedURLsValue(ctx, tunnel.Manifest.AllowedURLs, diagnostics),
+		TokenPreview: types.StringValue(tunnel.Token),
 	}
 }
-func tunnelDataAttributes() map[string]schema.Attribute {
-	return map[string]schema.Attribute{
-		"id":            schema.StringAttribute{Computed: true, MarkdownDescription: "The generated Obot tunnel ID."},
-		"display_name":  schema.StringAttribute{Computed: true, MarkdownDescription: "Human-readable tunnel display name."},
-		"description":   schema.StringAttribute{Computed: true, MarkdownDescription: "Description of the tunnel's purpose."},
-		"allowed_urls":  schema.SetAttribute{Computed: true, ElementType: types.StringType, MarkdownDescription: "Permitted target URL or hostname patterns. An empty set denies all targets."},
-		"token_preview": schema.StringAttribute{Computed: true, MarkdownDescription: "Non-secret shortened preview. The complete token cannot be read from Obot."},
-	}
-}
-func (d *mcpTunnelDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
-	if d.plural {
-		resp.Schema = schema.Schema{MarkdownDescription: "Lists configured MCP tunnel definitions, sorted by ID. An empty installation returns an empty list. Includes token previews only; complete tokens cannot be recovered by a data source.", Attributes: map[string]schema.Attribute{
-			"tunnels": schema.ListNestedAttribute{Computed: true, MarkdownDescription: "Configured tunnel definitions; connection status is not part of the definition.", NestedObject: schema.NestedAttributeObject{Attributes: tunnelDataAttributes()}},
-		}}
-		return
-	}
-	attributes := tunnelDataAttributes()
-	attributes["id"] = schema.StringAttribute{Required: true, MarkdownDescription: "Generated Obot tunnel ID to look up. Display names are not unique identifiers.", Validators: []validator.String{tunnelStringValidator{identifier: true}}}
-	resp.Schema = schema.Schema{MarkdownDescription: "Reads one MCP tunnel definition by its generated ID. Errors if it does not exist. Returns a preview only; creating or explicitly rotating a managed tunnel is required to capture a complete token.", Attributes: attributes}
-}
-func (d *mcpTunnelDataSource) Configure(_ context.Context, req datasource.ConfigureRequest, resp *datasource.ConfigureResponse) {
-	if req.ProviderData == nil {
-		return
-	}
-	conn, ok := req.ProviderData.(*client.Client)
-	if !ok {
-		resp.Diagnostics.AddError("Unexpected Data Source Configure Type", fmt.Sprintf("Expected an Obot API client, got %T.", req.ProviderData))
-		return
-	}
-	d.client = conn
-}
-func tunnelData(ctx context.Context, tunnel client.Tunnel, diagnostics *diag.Diagnostics) tunnelDataModel {
-	urls := tunnel.Manifest.AllowedURLs
+
+// allowedURLsValue converts an API allowlist, where nil means empty.
+func allowedURLsValue(ctx context.Context, urls []string, diagnostics *diag.Diagnostics) types.Set {
 	if urls == nil {
 		urls = []string{}
 	}
-	allowed, converted := types.SetValueFrom(ctx, types.StringType, urls)
-	diagnostics.Append(converted...)
-	return tunnelDataModel{ID: types.StringValue(tunnel.ID), DisplayName: types.StringValue(tunnel.Manifest.DisplayName), Description: types.StringValue(tunnel.Manifest.Description), AllowedURLs: allowed, TokenPreview: types.StringValue(tunnel.Token)}
+	value, d := types.SetValueFrom(ctx, types.StringType, urls)
+	diagnostics.Append(d...)
+	return value
 }
-func (d *mcpTunnelDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
-	if d.plural {
-		tunnels, err := d.client.ListTunnels(ctx)
-		if err != nil {
-			resp.Diagnostics.AddError("Error Listing MCP Tunnels", err.Error())
-			return
-		}
-		sort.Slice(tunnels, func(i, j int) bool { return tunnels[i].ID < tunnels[j].ID })
-		models := make([]tunnelDataModel, 0, len(tunnels))
-		for _, tunnel := range tunnels {
-			models = append(models, tunnelData(ctx, tunnel, &resp.Diagnostics))
-		}
-		object := types.ObjectType{AttrTypes: map[string]attr.Type{"id": types.StringType, "display_name": types.StringType, "description": types.StringType, "allowed_urls": types.SetType{ElemType: types.StringType}, "token_preview": types.StringType}}
-		values, converted := types.ListValueFrom(ctx, object, models)
-		resp.Diagnostics.Append(converted...)
-		resp.Diagnostics.Append(resp.State.Set(ctx, &tunnelsDataModel{Tunnels: values})...)
-		return
+
+func tunnelDataAttributes() map[string]schema.Attribute {
+	return map[string]schema.Attribute{
+		"id": schema.StringAttribute{
+			Computed:            true,
+			MarkdownDescription: "The generated Obot tunnel ID.",
+		},
+		"display_name": schema.StringAttribute{
+			Computed:            true,
+			MarkdownDescription: "Human-readable tunnel display name.",
+		},
+		"description": schema.StringAttribute{
+			Computed:            true,
+			MarkdownDescription: "Description of the tunnel's purpose.",
+		},
+		"allowed_urls": schema.SetAttribute{
+			Computed:            true,
+			ElementType:         types.StringType,
+			MarkdownDescription: "Permitted target URL or hostname patterns. An empty set denies all targets.",
+		},
+		"token_preview": schema.StringAttribute{
+			Computed:            true,
+			MarkdownDescription: "Non-secret shortened preview. The complete token cannot be read from Obot.",
+		},
 	}
+}
+
+func configuredClient(providerData any, diagnostics *diag.Diagnostics) *client.Client {
+	if providerData == nil {
+		return nil
+	}
+	conn, ok := providerData.(*client.Client)
+	if !ok {
+		diagnostics.AddError("Unexpected Data Source Configure Type", fmt.Sprintf("Expected an Obot API client, got %T.", providerData))
+	}
+	return conn
+}
+
+func newMCPTunnelDataSource() datasource.DataSource {
+	return &mcpTunnelDataSource{}
+}
+
+func (d *mcpTunnelDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
+	resp.TypeName = req.ProviderTypeName + "_mcp_tunnel"
+}
+
+func (d *mcpTunnelDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
+	attributes := tunnelDataAttributes()
+	attributes["id"] = schema.StringAttribute{
+		Required:            true,
+		MarkdownDescription: "Generated Obot tunnel ID to look up. Display names are not unique identifiers.",
+		Validators: []validator.String{
+			tunnelID(),
+		},
+	}
+	resp.Schema = schema.Schema{
+		MarkdownDescription: "Reads one MCP tunnel definition by its generated ID. Errors if it does not exist. " +
+			"Returns a preview only; creating or explicitly rotating a managed tunnel is required to capture a complete token.",
+		Attributes: attributes,
+	}
+}
+
+func (d *mcpTunnelDataSource) Configure(_ context.Context, req datasource.ConfigureRequest, resp *datasource.ConfigureResponse) {
+	if conn := configuredClient(req.ProviderData, &resp.Diagnostics); conn != nil {
+		d.client = conn
+	}
+}
+
+func (d *mcpTunnelDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
 	var data tunnelDataModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
@@ -116,6 +146,6 @@ func (d *mcpTunnelDataSource) Read(ctx context.Context, req datasource.ReadReque
 		resp.Diagnostics.AddError("Error Reading MCP Tunnel", err.Error())
 		return
 	}
-	data = tunnelData(ctx, *tunnel, &resp.Diagnostics)
+	data = newTunnelDataModel(ctx, *tunnel, &resp.Diagnostics)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }

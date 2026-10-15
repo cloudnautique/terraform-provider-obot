@@ -132,6 +132,7 @@ func testAccTunnelChecks(t *testing.T, extra func(context.Context, map[string]an
 func TestAccMCPTunnel_lifecycle(t *testing.T) {
 	var id, token string
 	initial := testAccTunnelConfig("terraform lifecycle", "initial", `["http://internal/*", "*.example.com"]`, 0)
+	cleared := testAccTunnelConfig("terraform lifecycle", "", `["http://internal/*", "*.example.com"]`, 0)
 	updated := testAccTunnelConfig("renamed", "updated", `[]`, 0)
 	rotated := testAccTunnelConfig("renamed", "updated", `[]`, 1)
 	resource.ParallelTest(t, resource.TestCase{
@@ -145,6 +146,10 @@ func TestAccMCPTunnel_lifecycle(t *testing.T) {
 				}
 				return nil
 			})},
+			{Config: cleared, ConfigStateChecks: append(testAccTunnelChecks(t, nil),
+				statecheck.ExpectKnownValue(tunnelAddress, tfjsonpath.New("description"), knownvalue.StringExact("")),
+				statecheck.ExpectIdentity(tunnelAddress, map[string]knownvalue.Check{"id": knownvalue.NotNull()}),
+			)},
 			{Config: updated, ConfigStateChecks: testAccTunnelChecks(t, func(_ context.Context, v map[string]any) error {
 				if v["id"] != id || v["token"] != token {
 					return fmt.Errorf("metadata update changed ID or credential")
@@ -154,6 +159,7 @@ func TestAccMCPTunnel_lifecycle(t *testing.T) {
 			{Config: updated, ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()}}},
 			{ResourceName: tunnelAddress, ImportState: true, ImportStateKind: resource.ImportCommandWithID, ImportStateVerify: true, ImportStateVerifyIgnore: []string{"token"}},
 			{ResourceName: tunnelAddress, ImportState: true, ImportStateKind: resource.ImportBlockWithID},
+			{ResourceName: tunnelAddress, ImportState: true, ImportStateKind: resource.ImportBlockWithResourceIdentity},
 			{Config: rotated, ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{plancheck.ExpectUnknownValue(tunnelAddress, tfjsonpath.New("token"))}}, ConfigStateChecks: testAccTunnelChecks(t, func(_ context.Context, v map[string]any) error {
 				if v["id"] != id || v["token"] == token {
 					return fmt.Errorf("rotation did not change only the credential")
@@ -338,9 +344,10 @@ func TestAccMCPTunnel_invalidConfiguration(t *testing.T) {
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck: func() { testAccPreCheck(t) }, ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
-			{Config: testAccTunnelConfig("", "", `[]`, 0), ExpectError: regexp.MustCompile("Invalid Tunnel Configuration")},
+			{Config: testAccTunnelConfig("", "", `[]`, 0), ExpectError: regexp.MustCompile(`(?s)Invalid Attribute Value Match.*display_name`)},
 			{Config: testAccTunnelConfig("name", "", `["bad*middle"]`, 0), ExpectError: regexp.MustCompile("Invalid Tunnel Allowed URL")},
-			{Config: testAccTunnelConfig("name", "", `[]`, -1), ExpectError: regexp.MustCompile("Invalid Tunnel Rotation Version")},
+			{Config: testAccTunnelConfig("name", "", `[]`, -1), ExpectError: regexp.MustCompile(`(?s)Invalid Attribute Value.*at least 0`)},
+			{Config: testAccTunnelConfig("name", " padded ", `[]`, 0), ExpectError: regexp.MustCompile(`(?s)Invalid Attribute Value Match.*description`)},
 			{Config: testAccTunnelConfig("name", "", `[]`, 0) + `import {
  to = obot_mcp_tunnel.test
  id = "../unsafe"
@@ -383,8 +390,8 @@ func TestAccMCPTunnel_dependencies(t *testing.T) {
 				}
 				return nil
 			})},
-			{Config: testAccTunnelConfig("terraform dependency", "", `[]`, 0), ExpectError: regexp.MustCompile("Error Updating MCP Tunnel")},
-			{Config: `provider "obot" {}`, ExpectError: regexp.MustCompile("Error Deleting MCP Tunnel")},
+			{Config: testAccTunnelConfig("terraform dependency", "", `[]`, 0), ExpectError: regexp.MustCompile(`(?s)Error Updating MCP Tunnel.*HTTP 400.*cannot\s+be\s+updated\s+because\s+allowedURLs`)},
+			{Config: `provider "obot" {}`, ExpectError: regexp.MustCompile(`(?s)Error Deleting MCP Tunnel.*HTTP 400.*cannot\s+be\s+deleted\s+because\s+it\s+is\s+used\s+by\s+MCP\s+server\s+catalog\s+entries`)},
 			{PreConfig: cleanupEntry, Config: config},
 		},
 	})

@@ -1,10 +1,10 @@
-// Copyright IBM Corp. 2021, 2026
 // SPDX-License-Identifier: MPL-2.0
 
 package provider
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 
@@ -43,7 +43,8 @@ func (p *ObotProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp 
 				MarkdownDescription: "Obot app URL or API base URL. Falls back to `OBOT_BASE_URL`. A trailing `/api` is added when omitted.",
 			},
 			"token": schema.StringAttribute{
-				Optional: true, Sensitive: true,
+				Optional:            true,
+				Sensitive:           true,
 				MarkdownDescription: "Obot API key with API access. Falls back to `OBOT_TOKEN`. Obtain it with `obot login --scope api --print-token`.",
 			},
 		},
@@ -85,7 +86,8 @@ func (p *ObotProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	conn, err := client.New(baseURL, token, p.version)
+	userAgent := fmt.Sprintf("terraform-provider-obot/%s (+https://registry.terraform.io/providers/obot-platform/obot) Terraform/%s", p.version, req.TerraformVersion)
+	conn, err := client.New(baseURL, token, userAgent)
 	if err != nil {
 		resp.Diagnostics.AddAttributeError(path.Root("base_url"), "Invalid Obot URL", err.Error())
 		return

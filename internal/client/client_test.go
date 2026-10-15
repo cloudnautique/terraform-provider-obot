@@ -17,7 +17,7 @@ func TestClientConnection(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer private-test-key" {
 			t.Error("request used unexpected credentials")
 		}
-		if r.Header.Get("User-Agent") != "terraform-provider-obot/test" {
+		if r.Header.Get("User-Agent") != "terraform-provider-obot/test Terraform/1.14.0" {
 			t.Error("request did not identify the provider")
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -36,7 +36,7 @@ func TestClientConnection(t *testing.T) {
 	defer server.Close()
 	for _, suffix := range []string{"/prefix", "/prefix/", "/prefix/api", "/prefix/api/"} {
 		t.Run(suffix, func(t *testing.T) {
-			conn, err := New(server.URL+suffix, "private-test-key", "test")
+			conn, err := New(server.URL+suffix, "private-test-key", "terraform-provider-obot/test Terraform/1.14.0")
 			if err != nil {
 				t.Fatal(err)
 			}

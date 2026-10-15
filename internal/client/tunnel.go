@@ -12,12 +12,13 @@ import (
 	"strings"
 )
 
-var tunnelIDPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+// TunnelIDPattern matches the Kubernetes-style names Obot generates for tunnels.
+var TunnelIDPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // TunnelManifest contains the mutable tunnel definition.
 type TunnelManifest struct {
 	DisplayName string   `json:"displayName"`
-	Description string   `json:"description,omitempty"`
+	Description string   `json:"description"`
 	AllowedURLs []string `json:"allowedURLs"`
 }
 
@@ -32,7 +33,7 @@ func (t Tunnel) String() string   { return fmt.Sprintf("Obot tunnel (%s, token=[
 func (t Tunnel) GoString() string { return t.String() }
 
 // ValidTunnelID checks the identifier format shared by API lookup and import.
-func ValidTunnelID(id string) bool { return tunnelIDPattern.MatchString(id) }
+func ValidTunnelID(id string) bool { return TunnelIDPattern.MatchString(id) }
 
 func tunnelPath(id string) (string, error) {
 	if !ValidTunnelID(id) {
@@ -50,9 +51,22 @@ func TunnelTokenPreview(token string) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(raw[:16]) + "...", nil
 }
 
-func validPreview(preview string) bool {
+// IsKnownTunnelTokenPreview reports whether a preview uses the format that
+// TunnelTokenPreview derives, so a cached token can be compared with it.
+func IsKnownTunnelTokenPreview(preview string) bool {
 	raw, err := base64.RawURLEncoding.Strict().DecodeString(strings.TrimSuffix(preview, "..."))
 	return strings.HasSuffix(preview, "...") && err == nil && len(raw) == 16
+}
+
+// validPreview accepts any nonempty preview so a server format change does
+// not break reads, but never a complete token, which must not be stored in
+// the non-sensitive token_preview attribute.
+func validPreview(preview string) bool {
+	if preview == "" {
+		return false
+	}
+	_, err := TunnelTokenPreview(preview)
+	return err != nil
 }
 
 func (c *Client) writeTunnel(ctx context.Context, method, path string, manifest *TunnelManifest, complete bool) (*Tunnel, error) {
@@ -69,7 +83,8 @@ func (c *Client) writeTunnel(ctx context.Context, method, path string, manifest 
 		return nil, err
 	}
 	if !ValidTunnelID(result.ID) {
-		return nil, fmt.Errorf("obot returned an invalid tunnel ID")
+		// Name the ID so an operator can remove an object the provider cannot track.
+		return nil, fmt.Errorf("obot returned an invalid tunnel ID %q; remove it in Obot if it was created", result.ID)
 	}
 	if complete {
 		if _, err := TunnelTokenPreview(result.Token); err != nil {

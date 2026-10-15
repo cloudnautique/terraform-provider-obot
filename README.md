@@ -344,6 +344,8 @@ Import an existing definition by its generated ID:
 terraform import obot_mcp_tunnel.customer mt1example
 ```
 
+Terraform 1.12+ can also import with an `import` block's `identity = { id = ... }`.
+
 Match its metadata and keep `token_rotation_version = 0` for adoption. Import
 preserves its ID and credential, leaves connected agents alone, and warns
 that `token` is null. It never substitutes a preview. Metadata updates and

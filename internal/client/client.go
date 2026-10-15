@@ -11,16 +11,29 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
 
+const (
+	// maxResponseBytes bounds decoded API responses.
+	maxResponseBytes = 16 << 20
+	// maxErrorMessageBytes bounds the server message kept in an HTTPError.
+	maxErrorMessageBytes = 512
+)
+
+// tokenLike matches base64url runs as long as a tunnel token (86 characters)
+// so one is never copied from a response body into diagnostics. It is long
+// enough to leave object names, which users need to see, intact.
+var tokenLike = regexp.MustCompile(`[A-Za-z0-9_-]{80,}`)
+
 // Client owns its credentials and HTTP settings independently of other provider instances.
 type Client struct {
-	baseURL string
-	token   string
-	version string
-	http    *http.Client
+	baseURL   string
+	token     string
+	userAgent string
+	http      *http.Client
 }
 
 // User describes the authenticated Obot identity.
@@ -30,15 +43,20 @@ type User struct {
 	Username string `json:"username"`
 }
 
-// HTTPError identifies API failures without retaining response bodies or secrets.
+// HTTPError identifies API failures. Message is the server's explanation,
+// shortened and with credentials and token-like values redacted.
 type HTTPError struct {
 	Method     string
 	Path       string
 	StatusCode int
+	Message    string
 }
 
 func (e *HTTPError) Error() string {
-	return fmt.Sprintf("the Obot API %s %s returned HTTP %d; check configuration, permissions, and object dependencies", e.Method, e.Path, e.StatusCode)
+	if e.Message == "" {
+		return fmt.Sprintf("the Obot API %s %s returned HTTP %d", e.Method, e.Path, e.StatusCode)
+	}
+	return fmt.Sprintf("the Obot API %s %s returned HTTP %d: %s", e.Method, e.Path, e.StatusCode, e.Message)
 }
 
 // IsNotFound distinguishes missing objects from authentication and transport failures.
@@ -47,8 +65,9 @@ func IsNotFound(err error) bool {
 	return errors.As(err, &failure) && failure.StatusCode == http.StatusNotFound
 }
 
-// New creates a client accepting an Obot app URL or API base URL.
-func New(baseURL, token, version string) (*Client, error) {
+// New creates a client accepting an Obot app URL or API base URL. The user
+// agent identifies the provider and Terraform versions to the server.
+func New(baseURL, token, userAgent string) (*Client, error) {
 	u, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil || u == nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") ||
 		u.User != nil || u.RawQuery != "" || u.Fragment != "" {
@@ -61,9 +80,9 @@ func New(baseURL, token, version string) (*Client, error) {
 	u.RawPath = ""
 
 	return &Client{
-		baseURL: u.String(),
-		token:   token,
-		version: version,
+		baseURL:   u.String(),
+		token:     token,
+		userAgent: userAgent,
 		http: &http.Client{
 			Timeout: 30 * time.Second,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
@@ -90,7 +109,7 @@ func (c *Client) request(ctx context.Context, method, path, body string, result 
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "terraform-provider-obot/"+c.version)
+	req.Header.Set("User-Agent", c.userAgent)
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -100,15 +119,36 @@ func (c *Client) request(ctx context.Context, method, path, body string, result 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &HTTPError{Method: method, Path: path, StatusCode: resp.StatusCode}
+		message, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorMessageBytes))
+		return &HTTPError{Method: method, Path: path, StatusCode: resp.StatusCode, Message: c.sanitize(message)}
 	}
 	if result == nil {
 		return nil
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(result); err != nil {
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	if err != nil {
+		return fmt.Errorf("reading Obot %s response: %w", path, err)
+	}
+	if len(data) > maxResponseBytes {
+		return fmt.Errorf("the Obot %s response exceeded %d MiB", path, maxResponseBytes>>20)
+	}
+	if err := json.Unmarshal(data, result); err != nil {
 		return fmt.Errorf("decoding Obot %s response: %w", path, err)
 	}
 	return nil
+}
+
+// sanitize turns an error body into a single diagnostic line. Redirect bodies
+// are dropped because they are HTML pages, not explanations.
+func (c *Client) sanitize(body []byte) string {
+	message := strings.Join(strings.Fields(string(body)), " ")
+	if strings.HasPrefix(message, "<") {
+		return ""
+	}
+	if c.token != "" {
+		message = strings.ReplaceAll(message, c.token, "[REDACTED]")
+	}
+	return tokenLike.ReplaceAllString(message, "[REDACTED]")
 }
 
 // Validate checks API-key validity, API scope, and authenticated identity.

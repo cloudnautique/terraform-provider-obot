@@ -113,8 +113,8 @@ func TestTunnelClientFailures(t *testing.T) {
 	for _, status := range []int{400, 401, 403, 404, 409, 500} {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(status)
-				_, _ = w.Write([]byte("private-secret-response"))
+				http.Error(w, "tunnel is used by entries\n token "+testTunnelToken()+" key test-key", status)
+				_, _ = w.Write([]byte("default-" + strings.Repeat("a", 60)))
 			}))
 			defer server.Close()
 			conn, err := New(server.URL, "test-key", "test")
@@ -122,8 +122,12 @@ func TestTunnelClientFailures(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, err = conn.GetTunnel(t.Context(), "mt1")
-			if err == nil || IsNotFound(err) != (status == 404) || strings.Contains(err.Error(), "private-secret-response") {
-				t.Fatal("incorrect or unsafe HTTP error")
+			if err == nil || IsNotFound(err) != (status == 404) {
+				t.Fatal("incorrect HTTP error")
+			}
+			want := fmt.Sprintf("HTTP %d: tunnel is used by entries token [REDACTED] key [REDACTED] default-%s", status, strings.Repeat("a", 60))
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("expected the redacted server message %q, got %q", want, err)
 			}
 			err = conn.DeleteTunnel(t.Context(), "mt1")
 			if (err == nil) != (status == 404) {
@@ -138,6 +142,8 @@ func TestTunnelClientFailures(t *testing.T) {
 		{"malformed", "private-secret-response", false},
 		{"wrong ID", `{"id":"mt2","token":"AQIDBAUGBwgJCgsMDQ4PEA..."}`, false},
 		{"full token on read", fmt.Sprintf(`{"id":"mt1","token":%q}`, testTunnelToken()), false},
+		{"empty preview on read", `{"id":"mt1","token":""}`, false},
+		{"invalid ID on create", `{"id":"Bad ID","token":""}`, true},
 		{"preview on create", `{"id":"mt1","token":"AQIDBAUGBwgJCgsMDQ4PEA..."}`, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -147,7 +153,12 @@ func TestTunnelClientFailures(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if test.complete {
+			if test.name == "invalid ID on create" {
+				_, err := conn.CreateTunnel(t.Context(), TunnelManifest{})
+				if err == nil || !strings.Contains(err.Error(), `"Bad ID"`) {
+					t.Fatal("create must name an ID it cannot track")
+				}
+			} else if test.complete {
 				result, err := conn.CreateTunnel(t.Context(), TunnelManifest{})
 				if err == nil || result == nil || result.ID != "mt1" {
 					t.Fatal("create must retain a recoverable ID when the secret response is invalid")
@@ -156,5 +167,45 @@ func TestTunnelClientFailures(t *testing.T) {
 				t.Fatal("accepted an invalid read response")
 			}
 		})
+	}
+}
+
+func TestTunnelClientPreviewFormatAndManifest(t *testing.T) {
+	var received map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			_ = json.NewDecoder(r.Body).Decode(&received)
+		}
+		_, _ = w.Write([]byte(`{"id":"mt1","token":"new-format"}`))
+	}))
+	defer server.Close()
+	conn, err := New(server.URL, "test-key", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read, err := conn.GetTunnel(t.Context(), "mt1"); err != nil || read.Token != "new-format" {
+		t.Fatalf("an unrecognized preview format must not break reads: %v", err)
+	}
+	if _, err := conn.UpdateTunnel(t.Context(), "mt1", TunnelManifest{DisplayName: "x", AllowedURLs: []string{}}); err != nil {
+		t.Fatal(err)
+	}
+	if description, ok := received["description"]; !ok || description != "" {
+		t.Fatal("an empty description must be sent explicitly so it clears the server value")
+	}
+}
+
+func TestClientResponseLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"items":[`))
+		_, _ = w.Write([]byte(strings.Repeat(" ", maxResponseBytes)))
+		_, _ = w.Write([]byte(`]}`))
+	}))
+	defer server.Close()
+	conn, err := New(server.URL, "test-key", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ListTunnels(t.Context()); err == nil || !strings.Contains(err.Error(), "exceeded") {
+		t.Fatalf("expected an explicit size error, got %v", err)
 	}
 }

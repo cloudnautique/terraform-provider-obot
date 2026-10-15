@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -244,14 +245,15 @@ func TestTunnelCreateIncompleteSecret(t *testing.T) {
 func TestTunnelDataSources(t *testing.T) {
 	preview, _ := client.TunnelTokenPreview(tunnelTestToken(1))
 	for _, test := range []struct {
-		name, body        string
-		plural, wantError bool
-		count             int
+		name, body string
+		wantError  bool
+		count      int
 	}{
-		{"empty", `{"items":[]}`, true, false, 0},
-		{"null items", `{"items":null}`, true, false, 0},
-		{"sorted", `{"items":[{"id":"mt2","token":"` + preview + `"},{"id":"mt1","token":"` + preview + `"}]}`, true, false, 2},
-		{"reject full tokens", `{"items":[{"id":"mt1","token":"` + tunnelTestToken(1) + `"}]}`, true, true, 0},
+		{"empty", `{"items":[]}`, false, 0},
+		{"null items", `{"items":null}`, false, 0},
+		{"sorted", `{"items":[{"id":"mt2","token":"` + preview + `"},{"id":"mt1","token":"` + preview + `"}]}`, false, 2},
+		{"unrecognized preview format", `{"items":[{"id":"mt1","token":"abc123..."}]}`, false, 1},
+		{"reject full tokens", `{"items":[{"id":"mt1","token":"` + tunnelTestToken(1) + `"}]}`, true, 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(test.body)) }))
@@ -260,7 +262,7 @@ func TestTunnelDataSources(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			d := &mcpTunnelDataSource{client: conn, plural: test.plural}
+			d := &mcpTunnelsDataSource{client: conn}
 			var schema datasource.SchemaResponse
 			d.Schema(t.Context(), datasource.SchemaRequest{}, &schema)
 			response := datasource.ReadResponse{State: tfsdk.State{Schema: schema.Schema}}
@@ -294,30 +296,150 @@ func TestTunnelDataSources(t *testing.T) {
 
 func TestTunnelValidators(t *testing.T) {
 	for _, test := range []struct {
-		value string
-		valid bool
-	}{{"private", true}, {"", false}, {" trailing ", false}} {
+		value      string
+		allowEmpty bool
+		valid      bool
+	}{
+		{"private", false, true},
+		{"", false, false},
+		{"", true, true},
+		{" trailing ", false, false},
+		{" trailing ", true, false},
+		{"multi\nline", true, true},
+	} {
 		var resp validator.StringResponse
-		(tunnelStringValidator{nonempty: true}).ValidateString(t.Context(), validator.StringRequest{ConfigValue: types.StringValue(test.value)}, &resp)
+		trimmedString(test.allowEmpty).ValidateString(t.Context(), validator.StringRequest{ConfigValue: types.StringValue(test.value)}, &resp)
 		if resp.Diagnostics.HasError() == test.valid {
-			t.Errorf("unexpected name validation for %q", test.value)
+			t.Errorf("unexpected trimmed-string validation for %q (allowEmpty=%v)", test.value, test.allowEmpty)
 		}
 	}
+	allowlist := setvalidator.ValueStringsAre(trimmedString(false), allowedURLRule{})
 	for _, test := range []struct {
 		value types.String
 		valid bool
-	}{{types.StringValue("*"), true}, {types.StringValue("*.internal"), true}, {types.StringValue("http://internal/*"), true}, {types.StringValue(""), false}, {types.StringValue("a*b"), false}, {types.StringValue("*a*"), false}, {types.StringValue(" x"), false}, {types.StringNull(), false}, {types.StringUnknown(), true}} {
+	}{
+		{types.StringValue("*"), true},
+		{types.StringValue("*.internal"), true},
+		{types.StringValue("http://internal/*"), true},
+		{types.StringValue(""), false},
+		{types.StringValue("a*b"), false},
+		{types.StringValue("*a*"), false},
+		{types.StringValue(" x"), false},
+		{types.StringUnknown(), true},
+	} {
 		var resp validator.SetResponse
-		(tunnelURLsValidator{}).ValidateSet(t.Context(), validator.SetRequest{ConfigValue: types.SetValueMust(types.StringType, []attr.Value{test.value})}, &resp)
+		allowlist.ValidateSet(t.Context(), validator.SetRequest{ConfigValue: types.SetValueMust(types.StringType, []attr.Value{test.value})}, &resp)
 		if resp.Diagnostics.HasError() == test.valid {
-			t.Error("unexpected allowlist validation")
+			t.Errorf("unexpected allowlist validation for %s", test.value)
 		}
 	}
-	for _, version := range []int64{-1, 0, 1} {
-		var resp validator.Int64Response
-		(tunnelRotationValidator{}).ValidateInt64(t.Context(), validator.Int64Request{ConfigValue: types.Int64Value(version)}, &resp)
-		if resp.Diagnostics.HasError() != (version < 0) {
-			t.Error("unexpected rotation validation")
+	for _, test := range []struct {
+		value string
+		valid bool
+	}{{"mt1", true}, {"../mt1", false}, {"Display Name", false}} {
+		var resp validator.StringResponse
+		tunnelID().ValidateString(t.Context(), validator.StringRequest{ConfigValue: types.StringValue(test.value)}, &resp)
+		if resp.Diagnostics.HasError() == test.valid {
+			t.Errorf("unexpected ID validation for %q", test.value)
+		}
+	}
+}
+
+func TestTunnelRefreshTokenUnrecognizedPreview(t *testing.T) {
+	model := tunnelResourceModel{Token: types.StringValue(tunnelTestToken(1))}
+	var diagnostics diag.Diagnostics
+	model.refreshToken("new-format-preview", &diagnostics)
+	if model.Token.IsNull() || len(diagnostics.Warnings()) != 1 || model.TokenPreview.ValueString() != "new-format-preview" {
+		t.Fatal("an unrecognized preview format must keep the token and warn")
+	}
+}
+
+func TestTunnelUpdateKeepsPlannedToken(t *testing.T) {
+	// The server reports a different preview, as after an external rotation
+	// between refresh and apply. Apply must still match the plan.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		preview, _ := client.TunnelTokenPreview(tunnelTestToken(9))
+		_ = json.NewEncoder(w).Encode(client.Tunnel{ID: "mt1", Token: preview, Manifest: client.TunnelManifest{DisplayName: "updated", AllowedURLs: []string{"http://internal/*"}}})
+	}))
+	defer server.Close()
+	conn, err := client.New(server.URL, "test-key", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := tunnelTestModel()
+	state := tunnelTestState(t, model)
+	model.DisplayName = types.StringValue("updated")
+	plan := tunnelTestState(t, model)
+	response := resource.UpdateResponse{State: state}
+	(&mcpTunnelResource{client: conn}).Update(t.Context(), resource.UpdateRequest{State: state, Plan: tfsdk.Plan(plan)}, &response)
+	if response.Diagnostics.HasError() {
+		t.Fatal(response.Diagnostics)
+	}
+	var got tunnelResourceModel
+	if d := response.State.Get(t.Context(), &got); d.HasError() {
+		t.Fatal(d)
+	}
+	if !got.Token.Equal(model.Token) || !got.TokenPreview.Equal(model.TokenPreview) || got.DisplayName.ValueString() != "updated" {
+		t.Fatal("metadata update changed planned token values")
+	}
+}
+
+func TestTunnelRotationIncompleteSecret(t *testing.T) {
+	// Obot revokes the old token as soon as it rotates, so state must not
+	// keep it even when the new secret is unusable.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		preview, _ := client.TunnelTokenPreview(tunnelTestToken(2))
+		_ = json.NewEncoder(w).Encode(client.Tunnel{ID: "mt1", Token: preview})
+	}))
+	defer server.Close()
+	conn, err := client.New(server.URL, "test-key", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := tunnelTestModel()
+	state := tunnelTestState(t, model)
+	model.TokenRotationVersion = types.Int64Value(1)
+	plan := tunnelTestState(t, model)
+	response := resource.UpdateResponse{State: state}
+	(&mcpTunnelResource{client: conn}).Update(t.Context(), resource.UpdateRequest{State: state, Plan: tfsdk.Plan(plan)}, &response)
+	if len(response.Diagnostics.Errors()) != 1 {
+		t.Fatalf("expected one error, got %v", response.Diagnostics)
+	}
+	var got tunnelResourceModel
+	if d := response.State.Get(t.Context(), &got); d.HasError() {
+		t.Fatal(d)
+	}
+	if !got.Token.IsNull() || got.TokenRotationVersion.ValueInt64() != 1 {
+		t.Fatal("rotation kept a revoked token or lost the rotation version")
+	}
+}
+
+func TestTunnelImportByIdentity(t *testing.T) {
+	r := &mcpTunnelResource{}
+	var identitySchema resource.IdentitySchemaResponse
+	r.IdentitySchema(t.Context(), resource.IdentitySchemaRequest{}, &identitySchema)
+	for _, test := range []struct {
+		id    string
+		valid bool
+	}{{"mt1", true}, {"../mt1", false}} {
+		identity := &tfsdk.ResourceIdentity{Schema: identitySchema.IdentitySchema}
+		if d := identity.Set(t.Context(), tunnelIdentityModel{ID: types.StringValue(test.id)}); d.HasError() {
+			t.Fatal(d)
+		}
+		response := resource.ImportStateResponse{State: tunnelTestState(t, tunnelResourceModel{}), Identity: identity}
+		r.ImportState(t.Context(), resource.ImportStateRequest{Identity: identity}, &response)
+		if response.Diagnostics.HasError() == test.valid {
+			t.Fatal(response.Diagnostics)
+		}
+		if !test.valid {
+			continue
+		}
+		var model tunnelResourceModel
+		if d := response.State.Get(t.Context(), &model); d.HasError() {
+			t.Fatal(d)
+		}
+		if model.ID.ValueString() != test.id || !model.Token.IsNull() || model.TokenRotationVersion.ValueInt64() != 0 {
+			t.Fatal("identity import did not preserve safe token semantics")
 		}
 	}
 }
