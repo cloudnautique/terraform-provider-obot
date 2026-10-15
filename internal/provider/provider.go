@@ -36,7 +36,7 @@ func (p *ObotProvider) Metadata(_ context.Context, _ provider.MetadataRequest, r
 
 func (p *ObotProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Connects to Obot using an API-scoped key. Set `OBOT_BASE_URL` and obtain `OBOT_TOKEN` with `export OBOT_TOKEN=\"$(obot login --scope api --print-token)\"`. Explicit provider configuration takes precedence over environment variables.",
+		MarkdownDescription: "Connects to Obot using an API-scoped key. Set `OBOT_BASE_URL` and obtain `OBOT_TOKEN` with `export OBOT_TOKEN=\"$(obot login --scope api --print-token)\"`. Explicit provider configuration takes precedence over environment variables. See the [catalog and access-policy guide](guides/catalogs-and-access-policies.md) for adopting shipped catalogs and the Everything policy, and the [tunnel guide](guides/mcp-tunnels.md) for tunnel credentials and import.",
 		Attributes: map[string]schema.Attribute{
 			"base_url": schema.StringAttribute{
 				Optional:            true,
@@ -101,11 +101,11 @@ func (p *ObotProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 }
 
 func (p *ObotProvider) Resources(_ context.Context) []func() resource.Resource {
-	return []func() resource.Resource{newMCPTunnelResource}
+	return []func() resource.Resource{newMCPTunnelResource, newMCPCatalogSourcesResource, newMCPAccessRuleResource}
 }
 
 func (p *ObotProvider) DataSources(_ context.Context) []func() datasource.DataSource {
-	return []func() datasource.DataSource{newCurrentUserDataSource, newMCPTunnelDataSource, newMCPTunnelsDataSource}
+	return []func() datasource.DataSource{newCurrentUserDataSource, newMCPTunnelDataSource, newMCPTunnelsDataSource, newMCPCatalogDataSource, newCurrentAuthProviderDataSource, newMCPAccessRuleDataSource, newMCPAccessRulesDataSource}
 }
 
 // New returns a factory for the Obot provider at the given version.

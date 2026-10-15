@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Manage Obot source, CLI artifacts, and isolated local test instances."""
 import argparse
+from contextlib import ExitStack
 import hashlib
 import http.cookiejar
 import io
@@ -24,6 +25,7 @@ import uuid
 import zipfile
 
 import discobox_network
+import catalog_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = ROOT / ".obot"
@@ -264,7 +266,7 @@ def wait_for(state, timeout):
     raise SetupError(f"Instance {state['name']} not healthy after {timeout}s: {last}")
 
 
-def start(name, ref, port=0, timeout=180, image=None, email=EMAIL, docker_socket=None):
+def start(name, ref, port=0, timeout=180, image=None, email=EMAIL, docker_socket=None, catalog_test=None):
     docker_socket = docker_socket or os.environ.get("OBOT_TEST_DOCKER_SOCKET", "/var/run/docker.sock")
     if not 0 <= port <= 65535 or timeout <= 0:
         raise SetupError("port must be 0-65535 and timeout must be positive")
@@ -312,6 +314,16 @@ def start(name, ref, port=0, timeout=180, image=None, email=EMAIL, docker_socket
         if docker_socket:
             command.extend(["-v", f"{docker_socket}:/var/run/docker.sock"])
         command.extend(network_arguments)
+        if catalog_test:
+            command.extend([
+                "--add-host", "host.docker.internal:host-gateway",
+                "-v", f"{catalog_test['ca_bundle']}:/etc/obot-test-catalog-ca.pem:ro",
+                "-e", "SSL_CERT_FILE=/etc/obot-test-catalog-ca.pem",
+                "-e", "OBOT_SERVER_DISALLOW_PRIVATE_IPMCP=false",
+                "-e", f"OBOT_SERVER_DEFAULT_MCPCATALOG_PATH={catalog_test['initial']}",
+                "-e", "NO_PROXY=localhost,127.0.0.1,::1,host.docker.internal",
+                "-e", "no_proxy=localhost,127.0.0.1,::1,host.docker.internal",
+            ])
         command.append(state["image_id"])
         run(command, env=environment)
         wait_for(state, timeout)
@@ -664,19 +676,28 @@ def main(argv=None):
         if args.instances < 1:
             parser.error("--instances must be positive")
         states, names = [], []
+        fixtures = ExitStack()
+        catalog_test = fixtures.enter_context(catalog_fixture.serve()) if args.command == "testacc" else None
         try:
             cli(args.ref)
             for index in range(args.instances):
                 name = f"test-{uuid.uuid4().hex[:8]}-{index}"
                 names.append(name)
                 email = EMAIL if index == 0 else f"test_obot_admin_{index + 1}@example.com"
-                states.append(start(name, args.ref, timeout=args.timeout, email=email))
+                states.append(start(name, args.ref, timeout=args.timeout, email=email, catalog_test=catalog_test))
             if args.command == "smoke":
                 smoke(states)
             else:
                 command = child_args
                 command = command or ["go", "test", "-count=1", "-timeout=60m", "-run=TestAcc", "./internal/provider/..."]
-                result = subprocess.run(command, env=environment_for(states))
+                environment = environment_for(states)
+                environment.update({
+                    "OBOT_TEST_MANAGE_DEFAULTS": "1",
+                    "OBOT_TEST_CONTAINER": states[0]["container"],
+                    "OBOT_TEST_CATALOG_SOURCE_INITIAL": catalog_test["initial"],
+                    "OBOT_TEST_CATALOG_SOURCE_REPLACEMENT": catalog_test["replacement"],
+                })
+                result = subprocess.run(command, env=environment)
                 if result.returncode:
                     for name in names:
                         logs(name)
@@ -691,11 +712,14 @@ def main(argv=None):
             raise
         finally:
             if args.keep:
+                if catalog_test:
+                    note("HTTPS catalog fixtures stopped; kept instances retain their test CA and source URLs for diagnosis only.")
                 note("Kept instances: " + ", ".join(names))
             else:
                 for name in reversed(names):
                     if state_path(name).exists():
                         stop(name)
+            fixtures.close()
     return 0
 
 

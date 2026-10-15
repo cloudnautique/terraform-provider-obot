@@ -69,7 +69,13 @@ authentication and isolation, then removes both instances.
 With multiple instances, it also verifies aliases using the compiled provider.
 `python3 scripts/obot.py testacc --ref main --instances 2` prepares the same
 environment for Terraform acceptance tests. `OBOT_TEST_INSTANCES` supplies
-JSON connection records to the child test process. Add `--keep` for debugging.
+JSON connection records to the child test process. Fresh acceptance runs serve
+small catalog fixtures over verified HTTPS using an ephemeral test CA (`openssl`
+is required). They set `OBOT_TEST_MANAGE_DEFAULTS=1` so installation-wide
+catalog replacement and seeded policy deletion tests run only on these disposable
+instances. Existing-instance runs skip those tests unless explicitly opted in.
+Add `--keep` for debugging; the fixture server stops when the runner exits,
+so kept fixture source URLs are no longer reachable.
 
 Failed manual startup retains its container and metadata for diagnosis;
 inspect it and run `down NAME` when done. Teardown checks ownership labels

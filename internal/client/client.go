@@ -38,9 +38,11 @@ type Client struct {
 
 // User describes the authenticated Obot identity.
 type User struct {
-	ID       string `json:"id"`
-	Email    string `json:"email"`
-	Username string `json:"username"`
+	ID            string `json:"id"`
+	Role          int    `json:"role"`
+	EffectiveRole int    `json:"effectiveRole"`
+	Email         string `json:"email"`
+	Username      string `json:"username"`
 }
 
 // HTTPError identifies API failures. Message is the server's explanation,

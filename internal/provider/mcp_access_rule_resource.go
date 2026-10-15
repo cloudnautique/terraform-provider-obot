@@ -1,0 +1,224 @@
+// SPDX-License-Identifier: MPL-2.0
+
+package provider
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/obot-platform/terraform-provider-obot/internal/client"
+)
+
+var (
+	_ resource.Resource                = &mcpAccessRuleResource{}
+	_ resource.ResourceWithConfigure   = &mcpAccessRuleResource{}
+	_ resource.ResourceWithImportState = &mcpAccessRuleResource{}
+)
+
+type mcpAccessRuleResource struct{ client *client.Client }
+type accessRuleModel struct {
+	ID          types.String `tfsdk:"id"`
+	CatalogID   types.String `tfsdk:"catalog_id"`
+	DisplayName types.String `tfsdk:"display_name"`
+	Subjects    types.Set    `tfsdk:"subjects"`
+	Resources   types.Set    `tfsdk:"resources"`
+}
+type referenceModel struct {
+	Type types.String `tfsdk:"type"`
+	ID   types.String `tfsdk:"id"`
+}
+
+var referenceAttrTypes = map[string]attr.Type{"type": types.StringType, "id": types.StringType}
+
+func newMCPAccessRuleResource() resource.Resource { return &mcpAccessRuleResource{} }
+func (r *mcpAccessRuleResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+	resp.TypeName = req.ProviderTypeName + "_mcp_access_rule"
+}
+func (r *mcpAccessRuleResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+	refAttrs := func() map[string]schema.Attribute {
+		return map[string]schema.Attribute{
+			"type": schema.StringAttribute{Required: true, MarkdownDescription: "Reference type. See the parent attribute for supported types."},
+			"id":   schema.StringAttribute{Required: true, MarkdownDescription: "Referenced object or group ID. A `selector` must use `*`."},
+		}
+	}
+	resp.Schema = schema.Schema{
+		MarkdownDescription: "Manages one policy shown under MCP Servers > Access Policies. Supports importing existing rules, including Everything. Policies grant access additively: deleting this rule leaves other grants in effect. This resource does not manage vMCP profiles. See the [catalog and access-policy guide](../guides/catalogs-and-access-policies.md) for adopting and removing Everything.",
+		Attributes: map[string]schema.Attribute{
+			"id":           schema.StringAttribute{Computed: true, MarkdownDescription: "The Obot access-control rule identifier.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
+			"catalog_id":   schema.StringAttribute{Optional: true, Computed: true, Default: stringdefault.StaticString("default"), Validators: []validator.String{obotStringValidator{identifier: true}}, PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()}, MarkdownDescription: "The catalog containing this policy. Defaults to `default`. Changing it replaces the rule."},
+			"display_name": schema.StringAttribute{Required: true, Validators: []validator.String{obotStringValidator{}}, MarkdownDescription: "The policy's display name, for example `Everything`. The name does not determine its subjects or grants."},
+			"subjects":     schema.SetNestedAttribute{Required: true, Validators: []validator.Set{ruleReferencesValidator{subjects: true}}, NestedObject: schema.NestedAttributeObject{Attributes: refAttrs()}, MarkdownDescription: "Subjects receiving access: `user` (Obot user ID), `group` (identity-provider group ID), `obotGroup` (Obot built-in group ID), or `selector` with ID `*` (everyone). An empty set grants no access. Preserve actual subjects when importing; a rule named Everything need not grant everyone access."},
+			"resources":    schema.SetNestedAttribute{Required: true, Validators: []validator.Set{ruleReferencesValidator{}}, NestedObject: schema.NestedAttributeObject{Attributes: refAttrs()}, MarkdownDescription: "Targets receiving the grant: `mcpServerCatalogEntry`, `mcpServer`, or `selector` with ID `*` (everything). Referenced entries and servers must belong to `catalog_id`. An empty set grants no access."},
+		}}
+}
+func (r *mcpAccessRuleResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+	if req.ProviderData == nil {
+		return
+	}
+	conn, ok := req.ProviderData.(*client.Client)
+	if !ok {
+		resp.Diagnostics.AddError("Unexpected Resource Configure Type", fmt.Sprintf("Expected an Obot API client, got %T.", req.ProviderData))
+		return
+	}
+	r.client = conn
+}
+func referencesValue(ctx context.Context, refs []client.RuleReference, diagnostics *diag.Diagnostics) types.Set {
+	values := make([]referenceModel, 0, len(refs))
+	for _, ref := range refs {
+		values = append(values, referenceModel{Type: types.StringValue(ref.Type), ID: types.StringValue(ref.ID)})
+	}
+	result, d := types.SetValueFrom(ctx, types.ObjectType{AttrTypes: referenceAttrTypes}, values)
+	diagnostics.Append(d...)
+	return result
+}
+func (m *accessRuleModel) fromAPI(ctx context.Context, rule *client.AccessRule, diagnostics *diag.Diagnostics) {
+	m.ID = types.StringValue(rule.ID)
+	m.CatalogID = types.StringValue(rule.CatalogID)
+	m.DisplayName = types.StringValue(rule.DisplayName)
+	m.Subjects = referencesValue(ctx, rule.Subjects, diagnostics)
+	m.Resources = referencesValue(ctx, rule.Resources, diagnostics)
+}
+func (m *accessRuleModel) manifest(ctx context.Context, diagnostics *diag.Diagnostics) client.AccessRuleManifest {
+	result := client.AccessRuleManifest{DisplayName: m.DisplayName.ValueString(), Subjects: []client.RuleReference{}, Resources: []client.RuleReference{}}
+	var subjects, resources []referenceModel
+	diagnostics.Append(m.Subjects.ElementsAs(ctx, &subjects, false)...)
+	diagnostics.Append(m.Resources.ElementsAs(ctx, &resources, false)...)
+	for _, ref := range subjects {
+		result.Subjects = append(result.Subjects, client.RuleReference{Type: ref.Type.ValueString(), ID: ref.ID.ValueString()})
+	}
+	for _, ref := range resources {
+		result.Resources = append(result.Resources, client.RuleReference{Type: ref.Type.ValueString(), ID: ref.ID.ValueString()})
+	}
+	return result
+}
+func (r *mcpAccessRuleResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+	var model accessRuleModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &model)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	manifest := model.manifest(ctx, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	rule, err := r.client.CreateAccessRule(ctx, model.CatalogID.ValueString(), manifest)
+	if err != nil {
+		resp.Diagnostics.AddError("Error Creating MCP Access Rule", err.Error())
+		return
+	}
+	model.fromAPI(ctx, rule, &resp.Diagnostics)
+	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
+}
+func (r *mcpAccessRuleResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	var model accessRuleModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &model)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	rule, err := r.client.GetAccessRule(ctx, model.CatalogID.ValueString(), model.ID.ValueString())
+	if client.IsNotFound(err) {
+		resp.State.RemoveResource(ctx)
+		return
+	}
+	if err != nil {
+		resp.Diagnostics.AddError("Error Reading MCP Access Rule", err.Error())
+		return
+	}
+	if rule.Generated {
+		resp.Diagnostics.AddError("Generated MCP Access Rule Cannot Be Managed", "This policy is generated by Obot. Manage its owning object instead.")
+		return
+	}
+	model.fromAPI(ctx, rule, &resp.Diagnostics)
+	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
+}
+func (r *mcpAccessRuleResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var model accessRuleModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &model)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	before, err := r.client.GetAccessRule(ctx, model.CatalogID.ValueString(), model.ID.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError("Error Reading MCP Access Rule", err.Error())
+		return
+	}
+	if before.Generated {
+		resp.Diagnostics.AddError("Generated MCP Access Rule Cannot Be Managed", "This policy is generated by Obot. Manage its owning object instead.")
+		return
+	}
+	manifest := model.manifest(ctx, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	rule, err := r.client.UpdateAccessRule(ctx, model.CatalogID.ValueString(), model.ID.ValueString(), manifest)
+	if err != nil {
+		resp.Diagnostics.AddError("Error Updating MCP Access Rule", err.Error())
+		return
+	}
+	model.fromAPI(ctx, rule, &resp.Diagnostics)
+	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
+}
+func (r *mcpAccessRuleResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	var model accessRuleModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &model)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	before, err := r.client.GetAccessRule(ctx, model.CatalogID.ValueString(), model.ID.ValueString())
+	if client.IsNotFound(err) {
+		return
+	}
+	if err != nil {
+		resp.Diagnostics.AddError("Error Reading MCP Access Rule", err.Error())
+		return
+	}
+	if before.Generated {
+		resp.Diagnostics.AddError("Generated MCP Access Rule Cannot Be Managed", "This policy is generated by Obot. Manage its owning object instead.")
+		return
+	}
+	if err := r.client.DeleteAccessRule(ctx, model.CatalogID.ValueString(), model.ID.ValueString()); err != nil {
+		resp.Diagnostics.AddError("Error Deleting MCP Access Rule", err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	for {
+		_, err := r.client.GetAccessRule(ctx, model.CatalogID.ValueString(), model.ID.ValueString())
+		if client.IsNotFound(err) {
+			return
+		}
+		if err != nil {
+			resp.Diagnostics.AddError("Error Verifying MCP Access Rule Deletion", err.Error())
+			return
+		}
+		timer := time.NewTimer(200 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			resp.Diagnostics.AddError("Error Waiting for MCP Access Rule Deletion", ctx.Err().Error())
+			return
+		case <-timer.C:
+		}
+	}
+}
+func (r *mcpAccessRuleResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	parts := strings.Split(req.ID, "/")
+	if len(parts) != 2 || !client.ValidObjectID(parts[0]) || !client.ValidObjectID(parts[1]) {
+		resp.Diagnostics.AddError("Invalid MCP Access Rule Import ID", "Use catalog_id/rule_id, for example default/acr1-everything.")
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("catalog_id"), parts[0])...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), parts[1])...)
+}
