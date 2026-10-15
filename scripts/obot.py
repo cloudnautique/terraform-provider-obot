@@ -249,13 +249,34 @@ def free_port():
         return listener.getsockname()[1]
 
 
+# Obot's run.sh checks readiness with pg_isready over the Unix socket. On first
+# boot that can pass against the socket-only temporary server the Postgres
+# entrypoint runs for initialization, so Obot then dials TCP 5432 before the
+# real server listens and exits. This is the log line it leaves.
+POSTGRES_STARTUP_RACE = "dial tcp 127.0.0.1:5432: connect: connection refused"
+
+
+def postgres_startup_race(container):
+    result = subprocess.run(["docker", "logs", "--tail", "50", container], text=True, capture_output=True)
+    return POSTGRES_STARTUP_RACE in result.stdout + result.stderr
+
+
 def wait_for(state, timeout):
     api = API(state["url"])
     deadline = time.monotonic() + timeout
     last = "not reachable"
+    restarted = False
     while time.monotonic() < deadline:
         container = owned("container", state["container"])
         if not container or not container["State"]["Running"]:
+            # The data volume is initialized by now, so a restart skips the
+            # temporary server and cannot hit the race again. Retry only once,
+            # and only for that failure, so other startup errors still fail.
+            if container and not restarted and postgres_startup_race(state["container"]):
+                note(f"Instance {state['name']} hit Obot's embedded PostgreSQL startup race; restarting once")
+                run(["docker", "start", state["container"]])
+                restarted = True
+                continue
             raise SetupError(f"Instance {state['name']} stopped during startup; inspect logs")
         try:
             if api.request("/api/healthz") == "ok":

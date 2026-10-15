@@ -163,6 +163,23 @@ class IsolationTests(ToolingTest):
             run.assert_not_called()
             remove.assert_not_called()
 
+    def test_startup_restarts_once_only_for_the_postgres_race(self):
+        state = {"name": "dev", "container": "obot-dev", "url": "http://127.0.0.1:1"}
+        stopped = {"State": {"Running": False}}
+        race = subprocess.CompletedProcess([], 0, "", "Failed to connect: " + obot.POSTGRES_STARTUP_RACE)
+        other = subprocess.CompletedProcess([], 0, "", "panic: invalid configuration")
+        for name, logs, starts in (("race", race, 1), ("other failure", other, 0)):
+            with self.subTest(name), \
+                    patch.object(obot, "owned", return_value=stopped), \
+                    patch.object(obot.subprocess, "run", return_value=logs), \
+                    patch.object(obot, "run") as run:
+                # The container stays stopped, so even the race retries only once.
+                with self.assertRaisesRegex(obot.SetupError, "stopped during startup"):
+                    obot.wait_for(state, 5)
+                self.assertEqual(run.call_count, starts)
+                if starts:
+                    run.assert_called_once_with(["docker", "start", "obot-dev"])
+
     def test_each_instance_receives_its_own_credentials(self):
         states = [
             {"name": "one", "url": "http://127.0.0.1:10001", "email": "one@example.com", "ref": "main"},
