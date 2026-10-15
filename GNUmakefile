@@ -51,8 +51,9 @@ lint:
 generate:
 	cd tools && go generate ./...
 
+# Name the source directories so the Discobox caches under .obot/ are never rewritten.
 fmt:
-	gofmt -s -w .
+	gofmt -s -w main.go internal tools
 
 test: test-go test-tooling
 
