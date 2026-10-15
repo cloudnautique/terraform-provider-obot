@@ -403,6 +403,27 @@ The project skills are versioned under `.agents/skills/`:
 Run `make generate` after schema or example changes and commit the generated
 `docs/` files. The generator is pinned in `tools/go.mod`.
 
+Preview the generated documentation locally with:
+
+```shell
+make docs-preview
+```
+
+Open `http://localhost:8765/`, or set `DOCS_PORT` to choose another port.
+The command installs pinned preview dependencies in an isolated environment
+under ignored `.obot/` and serves the existing `docs/` files. Run
+`make generate` first when schema or example changes need to be regenerated.
+Stop the preview with Ctrl-C.
+
+Use this command for local previews so their appearance stays consistent.
+The checked-in theme uses a white background, dark text, light-gray navigation,
+restrained blue links, and standard syntax highlighting. It stays light
+regardless of desktop color preferences. Keep theme changes in
+`scripts/docs_preview.css`; do not recreate temporary preview servers with
+other color schemes. The local preview approximates Terraform Registry;
+use the [official Registry documentation preview](https://registry.terraform.io/tools/doc-preview)
+for final rendering checks. Published docs remain Markdown, styled by the Registry.
+
 ## CI and releases
 
 CI builds and lints the provider, runs Go and tooling unit tests, and checks

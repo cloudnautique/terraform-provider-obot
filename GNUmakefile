@@ -5,6 +5,8 @@ OBOT_INSTANCE ?= dev
 OBOT_INSTANCES ?= 1
 TESTARGS ?=
 TFARGS ?=
+DOCS_PORT ?= 8765
+DOCS_PREVIEW_ENV = .obot/docs-preview/venv
 ACCEPTANCE_TEST = go test -count=1 -timeout=60m -run=TestAcc $(TESTARGS) ./internal/provider/...
 
 # Discobox shares the default Go cache volume across sandboxes. Keep this
@@ -33,6 +35,8 @@ help:
 		'make NAME-plan-destroy         Preview removal of Terraform-managed objects' \
 		'make NAME-destroy              Remove managed objects with confirmation' \
 		'  Replace NAME with instance name, for example: make dev-plan' \
+		'make docs-preview               Preview provider docs with the standard light theme' \
+		'  DOCS_PORT=8765                Override the preview port' \
 		'make build / lint / generate    Build, lint, or regenerate provider docs'
 
 build:
@@ -50,6 +54,15 @@ lint:
 
 generate:
 	cd tools && go generate ./...
+
+# Pin preview dependencies in an isolated, ignored environment.
+.obot/docs-preview/ready: scripts/docs-preview-requirements.txt
+	python3 -m venv "$(DOCS_PREVIEW_ENV)"
+	"$(DOCS_PREVIEW_ENV)/bin/python" -m pip install -r scripts/docs-preview-requirements.txt
+	touch $@
+
+docs-preview: .obot/docs-preview/ready
+	"$(DOCS_PREVIEW_ENV)/bin/python" scripts/docs_preview.py --port "$(DOCS_PORT)"
 
 # Name the source directories so the Discobox caches under .obot/ are never rewritten.
 fmt:
@@ -121,6 +134,6 @@ dev-check: dev
 %-destroy: dev
 	python3 scripts/obot.py terraform "$*" destroy -- $(TFARGS)
 
-.PHONY: help discobox-bootstrap build install lint generate fmt test test-go test-tooling \
+.PHONY: help discobox-bootstrap build install lint generate docs-preview fmt test test-go test-tooling \
 	test-acceptance test-acceptance-env test-acceptance-fresh test-smoke \
 	testacc testacc-local obot-smoke dev dev-check obot-source obot-cli obot-up obot-down
