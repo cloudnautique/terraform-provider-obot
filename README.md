@@ -324,6 +324,79 @@ authentication and Terraform state stay associated with the same instance.
 
 Use `unset TF_CLI_CONFIG_FILE` to return to your normal Terraform settings.
 
+## Planned MCP tunnel import behavior
+
+MCP tunnel resources are not implemented yet. The following records the
+proposed import contract; these commands and attributes are design examples,
+not currently available provider functionality.
+
+Support importing the existing tunnel definition by its generated Obot ID.
+Import adopts the display name, description, and allowed URLs without changing
+the tunnel ID or credential. Existing tunnel clients remain connected.
+
+Obot returns a full token only when creating a tunnel or rotating its secret.
+GET and LIST return a preview, and Obot stores only a digest and preview. An
+import therefore leaves the computed sensitive `token` attribute null and
+populates a separate `token_preview` attribute. The provider must never put a
+preview or an empty placeholder into `token`. This follows the precedent of
+[AWS IAM access-key imports](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_access_key#import),
+which adopt the object while leaving unrecoverable secret attributes unavailable.
+
+For the initial adoption, match the existing tunnel's configuration and use
+the proposed rotation counter's baseline value of zero:
+
+```hcl
+resource "obot_mcp_tunnel" "customer" {
+  display_name = "Customer private network"
+  allowed_urls = ["https://mcp.internal.example/mcp"]
+
+  token_rotation_version = 0
+}
+
+import {
+  to = obot_mcp_tunnel.customer
+  id = "mt1example"
+}
+```
+
+The equivalent CLI form would be:
+
+```shell
+terraform import obot_mcp_tunnel.customer mt1example
+```
+
+Import initializes `token_rotation_version` to zero; it is a provider-managed
+counter, not a version read from Obot. With matching configuration and that
+baseline, subsequent plans must not propose rotation or replacement. Import,
+refresh, and changes to the display name, description, or allowed URLs must
+not call the rotation API merely because `token` is unavailable. The importer
+should issue a clear warning explaining the missing token and recovery options.
+
+Customers can keep their current agent and existing secret-manager value
+unchanged while Terraform manages the tunnel definition. To capture a new
+token, explicitly change `token_rotation_version` from zero to one, wire the
+new token into the desired AWS or Vault resource, review the rotation plan,
+and apply. Obot immediately revokes the previous token and disconnects its
+clients; the agents must fetch the replacement secret and restart. Rotation
+and secret-manager publication are separate API operations, not an atomic
+transaction. If publication fails after rotation, retain the successfully
+captured token in Terraform state and retry publication without rotating again.
+
+Secret-export examples must reject an unavailable token with an actionable
+precondition; they must never substitute the preview or an empty string. A
+data source can read tunnel metadata and its preview, but cannot recover the
+token. Keeping a captured token sensitive redacts normal output; it still
+exists in Terraform state and requires an appropriately protected backend.
+
+Implementation acceptance coverage must verify metadata adoption, a null
+imported token, unchanged ID and credential, continued client connectivity,
+and a no-change plan for matching configuration. Import verification should
+ignore only attributes that cannot be reconstructed (`token` and the local
+rotation counter where applicable); separate assertions must check their
+intended imported values. Additional tests must cover explicit post-import
+rotation, token preservation across refresh and metadata updates, and a clear
+failure when attempting to export an unavailable token.
+
 ## Skills and documentation
 
 The project skills are versioned under `.agents/skills/`:
