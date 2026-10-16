@@ -83,7 +83,10 @@ func (f *fakeCatalog) serve(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	default:
-		f.t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		// Only API calls are the provider's; other probes of the port are ignored.
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			f.t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
