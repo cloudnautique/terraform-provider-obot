@@ -41,14 +41,75 @@ terraform apply add-source.tfplan
 The provider adds the source, requests a sync, and waits up to five minutes for
 it to complete. Use a complete HTTPS URL, including the desired Git ref and
 subdirectory; the URL identifies the source, so use one URL per resource and
-change it only by replacing the resource. To read a private source, create a
-Git credential in Obot and set `git_credential_id`. When it is unset, Obot keeps
-any token stored for the source in the UI, and Terraform never reads it.
+change it only by replacing the resource. Private sources need a Git
+credential; see below.
 
 A sync error for the source fails apply and names the error. Correct the URL,
 credential, or connectivity and apply again. Errors in other sources do not
 affect the resource. Obot may keep the entries from a source's last successful
 sync, so a failed apply is not proof that entries changed.
+
+### Private sources
+
+A Git credential holds a token Obot uses to read private repositories on one
+host. Manage it with `obot_git_credential` and reference it from the source:
+
+```terraform
+variable "github_token" {
+  description = "Token with read access to the private catalog repository."
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+}
+
+resource "obot_git_credential" "github" {
+  display_name = "GitHub catalogs"
+  host         = "github.com"
+
+  # Write-only: never stored in state. Increase the version to send a new token.
+  token_wo         = var.github_token
+  token_wo_version = 1
+}
+
+resource "obot_mcp_catalog_source" "private" {
+  url               = "https://github.com/example/private-catalog"
+  git_credential_id = obot_git_credential.github.id
+}
+```
+
+Obot sends the token as the HTTPS password, so use a token with read access,
+such as a GitHub fine-grained personal access token. Obot never returns it.
+`token_wo` keeps it out of Terraform state and needs Terraform 1.11 or later;
+increase `token_wo_version` to send a new token. `token` works with older
+Terraform versions but is stored, marked sensitive, in state. If Obot loses the
+stored token, the next plan sends it again.
+
+To use a credential created in the Obot UI, look up its ID:
+
+```terraform
+# Find the ID of a credential created in the Obot UI.
+data "obot_git_credential" "github" {
+  display_name = "GitHub catalogs"
+}
+
+resource "obot_mcp_catalog_source" "private" {
+  url               = "https://github.com/example/private-catalog"
+  git_credential_id = data.obot_git_credential.github.id
+}
+```
+
+Obot checks the credential when the source is saved: the source must be a Git
+repository URL on the credential's host. A URL on a known Git host, such as
+`github.com`, or whose path contains `.git`, is treated as a Git repository.
+A wrong or expired token fails apply with the source's sync error.
+
+Obot refuses to delete a credential while a source uses it. Terraform removes
+or updates the sources that reference a managed credential first. Changing a
+credential's `host` replaces it, so add
+`lifecycle { create_before_destroy = true }` to the credential, letting the
+sources switch to the new credential before the old one is deleted. When
+`git_credential_id` is unset, Obot keeps any token entered for the source in
+the UI; Terraform never reads it.
 
 ## 2. Adopt or remove existing sources
 

@@ -1,0 +1,1 @@
+terraform import obot_git_credential.github gc1example

@@ -16,16 +16,22 @@ FEATURES:
   source the way the Obot UI does, leaving other sources unchanged. It waits
   for the catalog to sync, reports only its own sync errors, and imports by
   source URL or resource identity.
+- **New resource:** `obot_git_credential` manages a token Obot uses to read
+  private Git sources on one host. The token can be write-only (`token_wo`,
+  Terraform 1.11+) so it never reaches state, and it imports by ID or resource
+  identity.
 - **New resource:** `obot_mcp_access_rule` manages one MCP access policy,
   including the shipped Everything policy, and imports by rule ID or resource
   identity.
 - **New data sources:** `obot_current_user`, `obot_current_auth_provider`,
   `obot_mcp_tunnel`, `obot_mcp_tunnels`, `obot_mcp_catalog`,
+  `obot_git_credential` (by ID or unique display name), `obot_git_credentials`,
   `obot_mcp_access_rule`, and `obot_mcp_access_rules`.
 - **New guides:** MCP tunnels (import, agents, AWS Secrets Manager, and Vault),
   and managing catalog sources and access policies.
 
 NOTES:
 
-- Tested with Terraform 1.14 against Obot v0.26.3 and `main`. Importing by
-  resource identity requires Terraform 1.12 or later.
+- Tested with Terraform 1.14 against Obot v0.26.3 and `main`. Write-only
+  tokens require Terraform 1.11 or later, and importing by resource identity
+  requires Terraform 1.12 or later.

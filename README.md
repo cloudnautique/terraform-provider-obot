@@ -3,9 +3,10 @@
 A Terraform provider for Obot, built with the Terraform Plugin Framework.
 
 The provider connects with an API-scoped key and manages MCP tunnels,
-individual default MCP catalog sources, and catalog MCP access policies. Read-only data
-sources expose current identity, authentication-provider metadata, tunnel
-metadata, catalog inventory, and access policies. It is published on the
+individual default MCP catalog sources, Git credentials for private sources,
+and catalog MCP access policies. Read-only data sources expose current
+identity, authentication-provider metadata, tunnel metadata, catalog
+inventory, Git credential IDs, and access policies. It is published on the
 Terraform Registry as [`obot-platform/obot`](https://registry.terraform.io/providers/obot-platform/obot).
 
 See the [catalog and access-policy guide](docs/guides/catalogs-and-access-policies.md)
@@ -39,7 +40,8 @@ provider "obot" {}
 data "obot_current_user" "current" {}
 ```
 
-The provider requires Terraform 1.0 or later; importing by resource identity
+The provider requires Terraform 1.0 or later; write-only Git credential tokens
+require Terraform 1.11 or later, and importing by resource identity
 requires Terraform 1.12 or later. Releases are tested with Terraform 1.14
 against Obot v0.26.3 and `main`. Use an Owner or Admin API key to manage
 catalog sources and access policies.
@@ -207,14 +209,17 @@ make test-acceptance-fresh OBOT_REF=v0.26.3 OBOT_INSTANCES=2
 ```
 
 Fresh acceptance runs include tests that add, adopt, and remove default catalog
-sources while leaving other sources and API-created entries in place, import the seeded Everything policy,
+sources while leaving other sources and API-created entries in place, sync a
+private Git source through a Git credential, import the seeded Everything policy,
 and delete that policy while preserving another rule. The HTTPS fixture
 server and temporary CA live only for the run. `openssl` is required for
 these tests. `--keep` retains containers for diagnosis but stops the fixture
 server. Existing-instance runs skip tests that change seeded defaults unless
 `OBOT_TEST_MANAGE_DEFAULTS=1` is explicitly supplied; catalog tests also need
 `OBOT_TEST_CATALOG_SOURCE_INITIAL`, `OBOT_TEST_CATALOG_SOURCE_REPLACEMENT`, and
-`OBOT_TEST_CATALOG_SOURCE_EXTRA` pointing to deterministic, trusted fixture sources. Use fresh instances for
+`OBOT_TEST_CATALOG_SOURCE_EXTRA` pointing to deterministic, trusted fixture sources,
+and the private Git source test needs `OBOT_TEST_CATALOG_GIT_SOURCE`,
+`OBOT_TEST_CATALOG_GIT_HOST`, and `OBOT_TEST_CATALOG_GIT_TOKEN`. Use fresh instances for
 the complete suite.
 
 Choose individual acceptance tests with
@@ -346,7 +351,8 @@ journalctl -u obot-discobox-network.service
 
 This configures network access; test instances still start with empty MCP
 catalog sources for manual development. Fresh acceptance instances instead
-use three deterministic catalogs served locally over verified HTTPS. They trust
+use deterministic catalogs served locally over verified HTTPS: three public
+YAML files and a private Git repository that requires a token generated for the run. They trust
 a temporary test CA and allow the Docker host's private address; no public
 catalog or external GitHub credentials are needed for these fixtures. An upstream DNS or proxy rejection is reported by
 Obot and is not bypassed by the forwarder.

@@ -718,6 +718,9 @@ def main(argv=None):
                     "OBOT_TEST_CATALOG_SOURCE_INITIAL": catalog_test["initial"],
                     "OBOT_TEST_CATALOG_SOURCE_REPLACEMENT": catalog_test["replacement"],
                     "OBOT_TEST_CATALOG_SOURCE_EXTRA": catalog_test["extra"],
+                    "OBOT_TEST_CATALOG_GIT_SOURCE": catalog_test["private"],
+                    "OBOT_TEST_CATALOG_GIT_HOST": catalog_test["private_host"],
+                    "OBOT_TEST_CATALOG_GIT_TOKEN": catalog_test["private_token"],
                 })
                 result = subprocess.run(command, env=environment)
                 if result.returncode:

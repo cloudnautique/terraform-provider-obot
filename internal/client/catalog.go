@@ -125,7 +125,7 @@ func (c *Client) WaitCatalogIdle(ctx context.Context, id string) (*Catalog, erro
 		if !result.IsSyncing {
 			return result, nil
 		}
-		if err := waitCatalogPoll(ctx); err != nil {
+		if err := pollDelay(ctx); err != nil {
 			return nil, err
 		}
 	}
@@ -168,7 +168,7 @@ func (c *Client) RefreshCatalog(ctx context.Context, id, previous string) (*Cata
 		if !result.IsSyncing && parseErr == nil && completed.After(before) {
 			return result, nil
 		}
-		if err := waitCatalogPoll(ctx); err != nil {
+		if err := pollDelay(ctx); err != nil {
 			return nil, fmt.Errorf("waiting for a new catalog synchronization: %w", err)
 		}
 	}
@@ -224,7 +224,7 @@ func applyCatalogChange(catalog *Catalog, change func(*CatalogSources)) (Catalog
 	return after, !slices.Equal(before.Sources, after.Sources) || !maps.Equal(before.GitCredentialIDs, after.GitCredentialIDs)
 }
 
-func waitCatalogPoll(ctx context.Context) error {
+func pollDelay(ctx context.Context) error {
 	timer := time.NewTimer(500 * time.Millisecond)
 	defer timer.Stop()
 	select {

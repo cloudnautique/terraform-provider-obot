@@ -82,7 +82,8 @@ func (r *mcpCatalogSourceResource) Schema(_ context.Context, _ resource.SchemaRe
 			},
 			"git_credential_id": schema.StringAttribute{
 				Optional: true,
-				MarkdownDescription: "ID of an existing Obot Git credential used to read a private source. " +
+				MarkdownDescription: "ID of the Obot Git credential used to read a private source, such as `obot_git_credential.example.id`. " +
+					"The credential's host must match the source. " +
 					"When unset, Obot keeps any token stored for the source in the UI; Terraform never reads it.",
 				Validators: []validator.String{
 					stringvalidator.RegexMatches(client.ObjectIDPattern, "must be an Obot Git credential ID"),

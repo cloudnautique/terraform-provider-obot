@@ -30,7 +30,7 @@ resource "obot_mcp_catalog_source" "team" {
 
 ### Optional
 
-- `git_credential_id` (String) ID of an existing Obot Git credential used to read a private source. When unset, Obot keeps any token stored for the source in the UI; Terraform never reads it.
+- `git_credential_id` (String) ID of the Obot Git credential used to read a private source, such as `obot_git_credential.example.id`. The credential's host must match the source. When unset, Obot keeps any token stored for the source in the UI; Terraform never reads it.
 
 ### Read-Only
 

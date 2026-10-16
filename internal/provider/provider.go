@@ -101,11 +101,11 @@ func (p *ObotProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 }
 
 func (p *ObotProvider) Resources(_ context.Context) []func() resource.Resource {
-	return []func() resource.Resource{newMCPTunnelResource, newMCPCatalogSourceResource, newMCPAccessRuleResource}
+	return []func() resource.Resource{newMCPTunnelResource, newMCPCatalogSourceResource, newMCPAccessRuleResource, newGitCredentialResource}
 }
 
 func (p *ObotProvider) DataSources(_ context.Context) []func() datasource.DataSource {
-	return []func() datasource.DataSource{newCurrentUserDataSource, newMCPTunnelDataSource, newMCPTunnelsDataSource, newMCPCatalogDataSource, newCurrentAuthProviderDataSource, newMCPAccessRuleDataSource, newMCPAccessRulesDataSource}
+	return []func() datasource.DataSource{newCurrentUserDataSource, newMCPTunnelDataSource, newMCPTunnelsDataSource, newMCPCatalogDataSource, newCurrentAuthProviderDataSource, newMCPAccessRuleDataSource, newMCPAccessRulesDataSource, newGitCredentialDataSource, newGitCredentialsDataSource}
 }
 
 // New returns a factory for the Obot provider at the given version.
