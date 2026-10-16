@@ -1,42 +1,31 @@
 ## 0.1.0 (Unreleased)
 
+Initial release.
+
 FEATURES:
 
-- Add the `obot_mcp_tunnel` resource with safe import, one-time token capture,
-  explicit rotation, external-rotation detection, and lifecycle acceptance tests.
-- Add `obot_mcp_tunnel` and `obot_mcp_tunnels` metadata data sources and a
-  tunnel guide covering import, agents, AWS Secrets Manager, and Vault.
-- Support importing `obot_mcp_tunnel` by resource identity (Terraform 1.12+).
-- Add the `obot_mcp_catalog_source` resource, which manages one default
-  catalog source the way the Obot UI does, leaving other sources unchanged.
-  It imports by source URL or resource identity and waits for the catalog to sync.
-- Add the `obot_mcp_access_rule` resource, which imports by rule ID or resource
-  identity, and the `obot_mcp_access_rule`,
-  `obot_mcp_access_rules`, `obot_mcp_catalog`, and `obot_current_auth_provider`
-  data sources, with a guide for managing catalog sources and access policies.
+- **New provider:** connects to Obot with an API-scoped key from `base_url` and
+  `token` or `OBOT_BASE_URL` and `OBOT_TOKEN`, and validates the key's scope
+  and identity. API error diagnostics include the server's explanation, with
+  credentials and token-like values redacted.
+- **New resource:** `obot_mcp_tunnel` manages an MCP tunnel definition. It
+  captures the one-time token on create, rotates only when
+  `token_rotation_version` changes, detects external rotation, and imports by
+  ID or resource identity without rotating.
+- **New resource:** `obot_mcp_catalog_source` manages one default catalog
+  source the way the Obot UI does, leaving other sources unchanged. It waits
+  for the catalog to sync, reports only its own sync errors, and imports by
+  source URL or resource identity.
+- **New resource:** `obot_mcp_access_rule` manages one MCP access policy,
+  including the shipped Everything policy, and imports by rule ID or resource
+  identity.
+- **New data sources:** `obot_current_user`, `obot_current_auth_provider`,
+  `obot_mcp_tunnel`, `obot_mcp_tunnels`, `obot_mcp_catalog`,
+  `obot_mcp_access_rule`, and `obot_mcp_access_rules`.
+- **New guides:** MCP tunnels (import, agents, AWS Secrets Manager, and Vault),
+  and managing catalog sources and access policies.
 
-IMPROVEMENTS:
+NOTES:
 
-- Include the Obot server's explanation, with credentials and token-like
-  values redacted, in API error diagnostics, such as the catalog entries that
-  block a tunnel update or deletion.
-- Use `terraform-plugin-framework-validators` for configuration validation.
-- Identify the Terraform version in the provider's User-Agent.
-- Tolerate future changes to the tunnel token-preview format: reads keep
-  working and a cached token is kept with a warning instead of failing.
-
-BUG FIXES:
-
-- Send an empty tunnel `description` explicitly instead of omitting it.
-- Clear the revoked token from state when a rotation succeeds but returns an
-  unusable secret.
-- Keep planned token values during a metadata update so an external rotation
-  between refresh and apply cannot cause an inconsistent-result error.
-- Report oversized API responses explicitly instead of as a decoding error.
-
-- Add main/release Obot source and CLI tooling, isolated Docker test instances,
-  local-auth test users, project skills, and acceptance-test CI.
-- Add authenticated provider configuration and the `obot_current_user` data source.
-
-- Bootstrap the Obot provider identity, build tooling, generated documentation,
-  and local Terraform development workflow.
+- Tested with Terraform 1.14 against Obot v0.26.3 and `main`. Importing by
+  resource identity requires Terraform 1.12 or later.

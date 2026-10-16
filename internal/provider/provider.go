@@ -36,7 +36,7 @@ func (p *ObotProvider) Metadata(_ context.Context, _ provider.MetadataRequest, r
 
 func (p *ObotProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Connects to Obot using an API-scoped key. Set `OBOT_BASE_URL` and obtain `OBOT_TOKEN` with `export OBOT_TOKEN=\"$(obot login --scope api --print-token)\"`. Explicit provider configuration takes precedence over environment variables. See the [catalog and access-policy guide](guides/catalogs-and-access-policies.md) for adopting shipped catalogs and the Everything policy, and the [tunnel guide](guides/mcp-tunnels.md) for tunnel credentials and import.",
+		MarkdownDescription: "Connects to Obot using an API-scoped key. Set `OBOT_BASE_URL` and obtain `OBOT_TOKEN` with `export OBOT_TOKEN=\"$(obot login --scope api --print-token)\"`. Explicit provider configuration takes precedence over environment variables. See the [catalog and access-policy guide](guides/catalogs-and-access-policies.md) for managing catalog sources and the Everything policy, and the [tunnel guide](guides/mcp-tunnels.md) for tunnel credentials and import.",
 		Attributes: map[string]schema.Attribute{
 			"base_url": schema.StringAttribute{
 				Optional:            true,

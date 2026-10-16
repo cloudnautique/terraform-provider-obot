@@ -5,74 +5,17 @@ A Terraform provider for Obot, built with the Terraform Plugin Framework.
 The provider connects with an API-scoped key and manages MCP tunnels,
 individual default MCP catalog sources, and catalog MCP access policies. Read-only data
 sources expose current identity, authentication-provider metadata, tunnel
-metadata, catalog inventory, and access policies. It is not yet published
-to the Terraform Registry.
+metadata, catalog inventory, and access policies. It is published on the
+Terraform Registry as [`obot-platform/obot`](https://registry.terraform.io/providers/obot-platform/obot).
 
 See the [catalog and access-policy guide](docs/guides/catalogs-and-access-policies.md)
 for adding, adopting, and removing catalog sources, looking up the
 current authentication provider, and importing or removing Everything.
 See the [tunnel guide](docs/guides/mcp-tunnels.md) for tunnel credentials and import.
 
-## Requirements
+## Use the provider
 
-- Go >= 1.25.8 for the provider, as specified in `go.mod`
-- Go >= 1.27 to build the current Obot CLI from source
-- Terraform >= 1.13
-- Python >= 3.10 for local test tooling
-- Docker running locally for Obot test instances
-- OpenSSL >= 1.1.1 for the HTTPS catalog test fixtures
-- GNU Make and golangci-lint v2.14.0
-
-Provider source: `obot-platform/obot`. Go module:
-`github.com/obot-platform/terraform-provider-obot`.
-
-## Discobox setup
-
-Inside Discobox, prepare the environment once before starting test instances:
-
-```shell
-make discobox-bootstrap
-make obot-up OBOT_REF=v0.26.3
-```
-
-The bootstrap discovers the Docker bridge gateway, sandbox DNS resolver,
-`HTTPS_PROXY`, and CA bundle. It installs an idempotent systemd service that
-forwards UDP/TCP DNS on the bridge's port 53 and proxy traffic on port 18888
-to the sandbox's existing resolver and egress proxy. TLS verification remains
-enabled. It also checks that DNS forwarding is ready.
-
-The Obot launcher detects Discobox and adds the DNS server, host-gateway
-mapping, proxy variables, local proxy exclusions, and read-only CA mount to
-every new test container. Ordinary Docker development and GitHub Actions do
-not use this setup. Existing instances must be torn down and recreated to
-pick up the settings; their data is disposable.
-
-Obot's URL-checking HTTP client also checks the proxy address. For these
-Discobox instances, the launcher sets `OBOT_SERVER_DISALLOW_PRIVATE_IPMCP=false`
-so it can connect to the private Docker bridge. Tests specifically exercising
-private-address rejection need a configuration with that restriction enabled.
-
-`.discobox/services/10-bootstrap.sh` invokes the same target at boot. A new
-service declaration takes effect on the next boot; run the Make target for
-an already running box. The forwarder is shared by all test instances and
-survives individual instance teardown. Re-running bootstrap reuses it, or
-restarts it when its code or configuration changes. To inspect it:
-
-```shell
-systemctl status obot-discobox-network.service
-journalctl -u obot-discobox-network.service
-```
-
-This configures network access; test instances still start with empty MCP
-catalog sources for manual development. Fresh acceptance instances instead
-use three deterministic catalogs served locally over verified HTTPS. They trust
-a temporary test CA and allow the Docker host's private address; no public
-catalog or external GitHub credentials are needed for these fixtures. An upstream DNS or proxy rejection is reported by
-Obot and is not bypassed by the forwarder.
-
-## Connect to Obot
-
-Configure the CLI for the target server and obtain an API-scoped token:
+Obtain an API-scoped key for the target server with the Obot CLI:
 
 ```shell
 export OBOT_BASE_URL="https://obot.example.com/api"
@@ -85,7 +28,8 @@ Then use the provider:
 terraform {
   required_providers {
     obot = {
-      source = "obot-platform/obot"
+      source  = "obot-platform/obot"
+      version = "~> 0.1"
     }
   }
 }
@@ -95,8 +39,10 @@ provider "obot" {}
 data "obot_current_user" "current" {}
 ```
 
-For local provider development, use the development overrides below because
-the provider has not been published yet.
+The provider requires Terraform 1.0 or later; importing by resource identity
+requires Terraform 1.12 or later. Releases are tested with Terraform 1.14
+against Obot v0.26.3 and `main`. Use an Owner or Admin API key to manage
+catalog sources and access policies.
 
 The provider accepts `base_url` and sensitive `token` attributes; explicit
 values take precedence over `OBOT_BASE_URL` and `OBOT_TOKEN`. Supply an app
@@ -104,6 +50,22 @@ URL or API base URL; a trailing `/api` is added when needed. Configuration
 validates API-key scope and the authenticated identity before reads.
 Each provider configuration owns an independent client, including aliases
 pointing at different Obot instances.
+
+To test unreleased provider changes, use the development overrides described
+under [Build and local Terraform development](#build-and-local-terraform-development).
+
+## Development requirements
+
+- Go >= 1.25.8 for the provider, as specified in `go.mod`
+- Go >= 1.27 to build the current Obot CLI from source
+- Terraform >= 1.13
+- Python >= 3.10 for local test tooling
+- Docker running locally for Obot test instances
+- OpenSSL >= 1.1.1 for the HTTPS catalog test fixtures
+- GNU Make and golangci-lint v2.14.0
+
+Provider source: `obot-platform/obot`. Go module:
+`github.com/obot-platform/terraform-provider-obot`.
 
 ## Obtain Obot source and CLI
 
@@ -345,6 +307,50 @@ authentication and Terraform state stay associated with the same instance.
 
 Use `unset TF_CLI_CONFIG_FILE` to return to your normal Terraform settings.
 
+## Discobox setup
+
+Inside Discobox, prepare the environment once before starting test instances:
+
+```shell
+make discobox-bootstrap
+make obot-up OBOT_REF=v0.26.3
+```
+
+The bootstrap discovers the Docker bridge gateway, sandbox DNS resolver,
+`HTTPS_PROXY`, and CA bundle. It installs an idempotent systemd service that
+forwards UDP/TCP DNS on the bridge's port 53 and proxy traffic on port 18888
+to the sandbox's existing resolver and egress proxy. TLS verification remains
+enabled. It also checks that DNS forwarding is ready.
+
+The Obot launcher detects Discobox and adds the DNS server, host-gateway
+mapping, proxy variables, local proxy exclusions, and read-only CA mount to
+every new test container. Ordinary Docker development and GitHub Actions do
+not use this setup. Existing instances must be torn down and recreated to
+pick up the settings; their data is disposable.
+
+Obot's URL-checking HTTP client also checks the proxy address. For these
+Discobox instances, the launcher sets `OBOT_SERVER_DISALLOW_PRIVATE_IPMCP=false`
+so it can connect to the private Docker bridge. Tests specifically exercising
+private-address rejection need a configuration with that restriction enabled.
+
+`.discobox/services/10-bootstrap.sh` invokes the same target at boot. A new
+service declaration takes effect on the next boot; run the Make target for
+an already running box. The forwarder is shared by all test instances and
+survives individual instance teardown. Re-running bootstrap reuses it, or
+restarts it when its code or configuration changes. To inspect it:
+
+```shell
+systemctl status obot-discobox-network.service
+journalctl -u obot-discobox-network.service
+```
+
+This configures network access; test instances still start with empty MCP
+catalog sources for manual development. Fresh acceptance instances instead
+use three deterministic catalogs served locally over verified HTTPS. They trust
+a temporary test CA and allow the Docker host's private address; no public
+catalog or external GitHub credentials are needed for these fixtures. An upstream DNS or proxy rejection is reported by
+Obot and is not bypassed by the forwarder.
+
 ## MCP tunnels
 
 Use `obot_mcp_tunnel` to define a tunnel and capture its one-time, sensitive
@@ -430,9 +436,10 @@ CI builds and lints the provider, runs Go and tooling unit tests, and checks
 generated documentation. The acceptance workflow exercises both `main` and
 `v0.26.3` with two Docker instances using the same commands as local development.
 
-Before the first provider release, configure `GPG_PRIVATE_KEY` and `PASSPHRASE`
-repository secrets, confirm the Registry namespace, and register the provider.
-Release tags use the form `v0.1.0`.
+Pushing a `v*` tag, such as `v0.1.0`, runs GoReleaser to build, sign, and
+publish a GitHub release, which the Terraform Registry then picks up.
+[RELEASING.md](RELEASING.md) covers the one-time Registry setup and the
+release checklist.
 
 ## License
 
