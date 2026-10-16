@@ -152,11 +152,11 @@ func TestCatalogRefreshWaitsForNewSync(t *testing.T) {
 }
 func TestCatalogRefreshFailureAndCancellation(t *testing.T) {
 	for _, test := range []struct {
-		name             string
-		status           int
-		stale, syncError bool
+		name   string
+		status int
+		stale  bool
 	}{
-		{name: "source failure", status: 200, syncError: true}, {name: "timeout", status: 200, stale: true}, {name: "forbidden", status: 403},
+		{name: "timeout", status: 200, stale: true}, {name: "forbidden", status: 403, stale: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			conn := testCatalogClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -168,9 +168,6 @@ func TestCatalogRefreshFailureAndCancellation(t *testing.T) {
 				if test.stale {
 					result.LastSynced = "2000-01-01T00:00:00Z"
 				}
-				if test.syncError {
-					result.SyncErrors = map[string]string{"https://example.com": "private-detail"}
-				}
 				_ = json.NewEncoder(w).Encode(result)
 			})
 			ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
@@ -179,13 +176,25 @@ func TestCatalogRefreshFailureAndCancellation(t *testing.T) {
 			if err == nil {
 				t.Fatal("failed synchronization accepted")
 			}
-			if strings.Contains(err.Error(), "private-detail") {
-				t.Fatal("API details leaked into diagnostics")
-			}
 			if test.stale && !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatal("timeout cause lost")
 			}
 		})
+	}
+}
+
+// Per-source failures belong to the caller, which reports only its own source.
+func TestCatalogRefreshReturnsSourceErrors(t *testing.T) {
+	conn := testCatalogClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			w.WriteHeader(204)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(Catalog{ID: "default", LastSynced: "2000-01-01T00:00:01Z", SyncErrors: map[string]string{"https://example.com": "not found"}})
+	})
+	result, err := conn.RefreshCatalog(t.Context(), "default", "2000-01-01T00:00:00Z")
+	if err != nil || result.SyncErrors["https://example.com"] != "not found" {
+		t.Fatalf("result = %v, err = %v", result, err)
 	}
 }
 func TestAccessRuleClientScopeAndPaths(t *testing.T) {

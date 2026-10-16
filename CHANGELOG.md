@@ -7,6 +7,12 @@ FEATURES:
 - Add `obot_mcp_tunnel` and `obot_mcp_tunnels` metadata data sources and a
   tunnel guide covering import, agents, AWS Secrets Manager, and Vault.
 - Support importing `obot_mcp_tunnel` by resource identity (Terraform 1.12+).
+- Add the `obot_mcp_catalog_source` resource, which manages one default
+  catalog source the way the Obot UI does, leaving other sources unchanged.
+  It imports by source URL or resource identity and waits for the catalog to sync.
+- Add the `obot_mcp_access_rule` resource and the `obot_mcp_access_rule`,
+  `obot_mcp_access_rules`, `obot_mcp_catalog`, and `obot_current_auth_provider`
+  data sources, with a guide for managing catalog sources and access policies.
 
 IMPROVEMENTS:
 

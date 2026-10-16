@@ -11,7 +11,7 @@ import threading
 
 @contextmanager
 def serve():
-    """Serve two deterministic catalogs over verified TLS, for fresh containers only."""
+    """Serve three deterministic catalogs over verified TLS, for fresh containers only."""
     with tempfile.TemporaryDirectory(prefix="obot-test-catalog-") as directory:
         path = Path(directory)
         cert, key = path / "cert.pem", path / "key.pem"
@@ -27,7 +27,8 @@ def serve():
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
-                names = {"/shipped.yaml": "Shipped Tool", "/replacement.yaml": "Replacement Tool"}
+                names = {"/shipped.yaml": "Shipped Tool", "/replacement.yaml": "Replacement Tool",
+                         "/extra.yaml": "Extra Tool"}
                 name = names.get(self.path)
                 if not name:
                     self.send_error(404)
@@ -53,7 +54,7 @@ def serve():
         base = f"https://host.docker.internal:{server.server_port}"
         try:
             yield {"ca_bundle": bundle, "initial": base + "/shipped.yaml",
-                   "replacement": base + "/replacement.yaml"}
+                   "replacement": base + "/replacement.yaml", "extra": base + "/extra.yaml"}
         finally:
             server.shutdown()
             server.server_close()

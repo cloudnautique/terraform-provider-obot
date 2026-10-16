@@ -16,7 +16,7 @@ must declare `obot-platform/obot` as the Obot provider source. The
 [tunnel guide](../docs/guides/mcp-tunnels.md) explains import, missing tokens,
 rotation downtime, and state protection.
 
-- `resources/obot_mcp_catalog_sources/` and `resources/obot_mcp_access_rule/`
+- `resources/obot_mcp_catalog_source/` and `resources/obot_mcp_access_rule/`
   show source ownership and independent MCP access policies, with import examples.
 - `data-sources/obot_mcp_catalog/`, `obot_mcp_access_rule/`,
   `obot_mcp_access_rules/`, and `obot_current_auth_provider/` provide discovery.

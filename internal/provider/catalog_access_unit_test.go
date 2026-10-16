@@ -51,22 +51,12 @@ func testRuleModel(t *testing.T) accessRuleModel {
 	}
 	return model
 }
-func testSourcesModel(t *testing.T) catalogSourcesModel {
-	t.Helper()
-	var diagnostics diag.Diagnostics
-	model := catalogSourcesModel{}
-	model.fromAPI(t.Context(), &client.Catalog{ID: "default", Sources: []string{"https://example.com/shipped.yaml"}, GitCredentialIDs: map[string]string{"https://example.com/shipped.yaml": "gc1-test"}}, &diagnostics)
-	if diagnostics.HasError() {
-		t.Fatal(diagnostics)
-	}
-	return model
-}
 func TestManagementImportIdentifiers(t *testing.T) {
 	for _, test := range []struct {
 		name, id    string
 		rule, valid bool
 	}{
-		{"default catalog", "default", false, true}, {"other catalog", "other", false, false}, {"catalog path traversal", "../default", false, false},
+		{"source URL", "https://example.com/catalog.yaml", false, true}, {"catalog ID", "default", false, false}, {"plain HTTP", "http://example.com/catalog.yaml", false, false}, {"embedded credentials", "https://user:secret@example.com/catalog.yaml", false, false},
 		{"policy", "default/acr1-everything", true, true}, {"missing scope", "acr1-everything", true, false}, {"empty ID", "default/", true, false}, {"extra slash", "default/../acr1", true, false}, {"query injection", "default/acr1?x=y", true, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -76,8 +66,8 @@ func TestManagementImportIdentifiers(t *testing.T) {
 				r = newMCPAccessRuleResource()
 				state = testManagementState(t, r, testRuleModel(t))
 			} else {
-				r = newMCPCatalogSourcesResource()
-				state = testManagementState(t, r, testSourcesModel(t))
+				r = newMCPCatalogSourceResource()
+				state = testManagementState(t, r, testSourceModel())
 			}
 			response := resource.ImportStateResponse{State: state}
 			importer, ok := r.(resource.ResourceWithImportState)
@@ -99,8 +89,8 @@ func TestManagementReadAndDeleteErrors(t *testing.T) {
 				var r resource.Resource
 				var state tfsdk.State
 				if kind == "catalog" {
-					r = &mcpCatalogSourcesResource{client: conn}
-					state = testManagementState(t, r, testSourcesModel(t))
+					r = &mcpCatalogSourceResource{client: conn}
+					state = testManagementState(t, r, testSourceModel())
 				} else {
 					r = &mcpAccessRuleResource{client: conn}
 					state = testManagementState(t, r, testRuleModel(t))
@@ -140,56 +130,6 @@ func TestGeneratedRuleCannotBeManaged(t *testing.T) {
 		t.Fatal("generated rule was managed")
 	}
 }
-func TestCatalogAcceptedWriteSurvivesRefreshFailure(t *testing.T) {
-	conn := testManagementClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/refresh") {
-			w.WriteHeader(403)
-			return
-		}
-		sources := []string{}
-		if r.Method == "PUT" {
-			var input client.CatalogSources
-			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-				t.Error(err)
-			}
-			sources = input.Sources
-		}
-		_ = json.NewEncoder(w).Encode(client.Catalog{ID: "default", Sources: sources, LastSynced: "2000-01-01T00:00:00Z"})
-	})
-	r := &mcpCatalogSourcesResource{client: conn}
-	plan := testManagementState(t, r, testSourcesModel(t))
-	response := resource.CreateResponse{State: tfsdk.State{Schema: plan.Schema}}
-	r.Create(t.Context(), resource.CreateRequest{Plan: tfsdk.Plan(plan)}, &response)
-	if !response.Diagnostics.HasError() {
-		t.Fatal("refresh failure ignored")
-	}
-	var saved catalogSourcesModel
-	if diagnostics := response.State.Get(t.Context(), &saved); diagnostics.HasError() {
-		t.Fatal(diagnostics)
-	}
-	if saved.CatalogID.ValueString() != "default" || saved.Sources.IsNull() {
-		t.Fatal("accepted singleton write lost from state")
-	}
-}
-func TestCatalogAdoptionAndReadAreSideEffectFree(t *testing.T) {
-	mutations := 0
-	model := testSourcesModel(t)
-	conn := testManagementClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "GET" {
-			mutations++
-		}
-		_ = json.NewEncoder(w).Encode(client.Catalog{ID: "default", Sources: []string{"https://example.com/shipped.yaml"}, GitCredentialIDs: map[string]string{"https://example.com/shipped.yaml": "gc1-test"}})
-	})
-	r := &mcpCatalogSourcesResource{client: conn}
-	state := testManagementState(t, r, model)
-	created := resource.CreateResponse{State: state}
-	r.Create(t.Context(), resource.CreateRequest{Plan: tfsdk.Plan(state)}, &created)
-	read := resource.ReadResponse{State: created.State}
-	r.Read(t.Context(), resource.ReadRequest{State: created.State}, &read)
-	if created.Diagnostics.HasError() || read.Diagnostics.HasError() || mutations != 0 {
-		t.Fatalf("matching adoption or read mutated the catalog: %v %v", created.Diagnostics, read.Diagnostics)
-	}
-}
 func TestRuleReferenceValidation(t *testing.T) {
 	for _, test := range []struct {
 		kind, id        string
@@ -212,18 +152,6 @@ func TestRuleReferenceValidation(t *testing.T) {
 		(ruleReferencesValidator{}).ValidateSet(t.Context(), validator.SetRequest{ConfigValue: value}, &response)
 		if response.Diagnostics.HasError() {
 			t.Fatal(response.Diagnostics)
-		}
-	}
-}
-func TestCatalogSourceValidation(t *testing.T) {
-	for _, test := range []struct {
-		source string
-		valid  bool
-	}{{"https://github.com/org/catalog/tree/main", true}, {"https://example.com/catalog.yaml", true}, {"github.com/org/catalog", false}, {"http://example.com/catalog.yaml", false}, {"https://user:secret@example.com/catalog.yaml", false}, {"", false}, {" https://example.com/catalog", false}} {
-		var response validator.SetResponse
-		(catalogSourcesValidator{}).ValidateSet(t.Context(), validator.SetRequest{ConfigValue: types.SetValueMust(types.StringType, []attr.Value{types.StringValue(test.source)})}, &response)
-		if response.Diagnostics.HasError() == test.valid {
-			t.Errorf("unexpected validation for %q: %v", test.source, response.Diagnostics)
 		}
 	}
 }
@@ -280,7 +208,7 @@ func TestCatalogDataSourceInventory(t *testing.T) {
 
 // Verify the framework schema of every new object, including nested collections.
 func TestManagementSchemas(t *testing.T) {
-	for _, r := range []resource.Resource{newMCPCatalogSourcesResource(), newMCPAccessRuleResource()} {
+	for _, r := range []resource.Resource{newMCPCatalogSourceResource(), newMCPAccessRuleResource()} {
 		var response resource.SchemaResponse
 		r.Schema(t.Context(), resource.SchemaRequest{}, &response)
 		if d := response.Schema.ValidateImplementation(context.Background()); d.HasError() {
@@ -365,30 +293,6 @@ func TestAccessRuleDataSourcesCollections(t *testing.T) {
 				if len(subjects.Elements()) != 1 {
 					t.Fatal("subject metadata missing")
 				}
-			}
-		})
-	}
-}
-func TestCatalogCredentialReferencesValidation(t *testing.T) {
-	r := newMCPCatalogSourcesResource()
-	for _, test := range []struct {
-		name      string
-		ids       types.Map
-		sources   types.Set
-		wantError bool
-	}{
-		{"matching", types.MapValueMust(types.StringType, map[string]attr.Value{"https://example.com/catalog": types.StringValue("gc1-test")}), types.SetValueMust(types.StringType, []attr.Value{types.StringValue("https://example.com/catalog")}), false},
-		{"missing source", types.MapValueMust(types.StringType, map[string]attr.Value{"https://example.com/catalog": types.StringValue("gc1-test")}), types.SetValueMust(types.StringType, []attr.Value{}), true},
-		{"bad ID", types.MapValueMust(types.StringType, map[string]attr.Value{"https://example.com/catalog": types.StringValue("../credential")}), types.SetValueMust(types.StringType, []attr.Value{types.StringValue("https://example.com/catalog")}), true},
-		{"unknown credential ID", types.MapValueMust(types.StringType, map[string]attr.Value{"https://example.com/catalog": types.StringUnknown()}), types.SetValueMust(types.StringType, []attr.Value{types.StringValue("https://example.com/catalog")}), false},
-		{"unknown source", types.MapValueMust(types.StringType, map[string]attr.Value{"https://example.com/catalog": types.StringValue("gc1-test")}), types.SetValueMust(types.StringType, []attr.Value{types.StringUnknown()}), false},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			state := testManagementState(t, r, catalogSourcesModel{CatalogID: types.StringValue("default"), Sources: test.sources, GitCredentialIDs: test.ids})
-			response := resource.ValidateConfigResponse{}
-			(&mcpCatalogSourcesResource{}).ValidateConfig(t.Context(), resource.ValidateConfigRequest{Config: tfsdk.Config(state)}, &response)
-			if response.Diagnostics.HasError() != test.wantError {
-				t.Fatal(response.Diagnostics)
 			}
 		})
 	}

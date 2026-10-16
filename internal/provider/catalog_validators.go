@@ -36,32 +36,38 @@ func (v obotStringValidator) ValidateString(ctx context.Context, req validator.S
 	}
 }
 
-type catalogSourcesValidator struct{}
-
-func (catalogSourcesValidator) Description(context.Context) string {
-	return "Sources must be complete HTTPS URLs without embedded credentials or surrounding whitespace. Use an empty set to remove all source-managed entries."
+// validCatalogSourceURL requires a complete HTTPS URL, which Obot stores
+// unchanged, so the configured value can identify the source.
+func validCatalogSourceURL(s string) bool {
+	u, err := url.Parse(s)
+	return err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil && strings.TrimSpace(s) == s
 }
-func (v catalogSourcesValidator) MarkdownDescription(ctx context.Context) string {
+
+// legacyCatalogSource is replaced by Obot's configured default catalog path at
+// every startup, so a resource using it would be removed by each restart.
+const legacyCatalogSource = "https://github.com/obot-platform/mcp-catalog"
+
+type catalogSourceURL struct{}
+
+func (catalogSourceURL) Description(context.Context) string {
+	return "must be a complete HTTPS URL without embedded credentials or surrounding whitespace"
+}
+
+func (v catalogSourceURL) MarkdownDescription(ctx context.Context) string {
 	return v.Description(ctx)
 }
-func (v catalogSourcesValidator) ValidateSet(ctx context.Context, req validator.SetRequest, resp *validator.SetResponse) {
+
+func (v catalogSourceURL) ValidateString(ctx context.Context, req validator.StringRequest, resp *validator.StringResponse) {
 	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
 		return
 	}
-	for _, element := range req.ConfigValue.Elements() {
-		value, ok := element.(types.String)
-		if ok && value.IsUnknown() {
-			continue
-		}
-		if !ok || value.IsNull() {
-			resp.Diagnostics.AddAttributeError(req.Path, "Invalid Catalog Source", v.Description(ctx))
-			continue
-		}
-		s := value.ValueString()
-		u, err := url.Parse(s)
-		if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || strings.TrimSpace(s) != s {
-			resp.Diagnostics.AddAttributeError(req.Path, "Invalid Catalog Source", v.Description(ctx))
-		}
+	switch source := req.ConfigValue.ValueString(); {
+	case !validCatalogSourceURL(source):
+		resp.Diagnostics.AddAttributeError(req.Path, "Invalid Catalog Source", "Catalog source "+v.Description(ctx)+".")
+	case source == legacyCatalogSource:
+		resp.Diagnostics.AddAttributeError(req.Path, "Legacy Catalog Source",
+			"Obot replaces this URL with its configured default catalog path every time it starts. "+
+				"Use the URL the catalog currently lists, normally https://github.com/obot-platform/mcp-catalog/v2-schema.")
 	}
 }
 

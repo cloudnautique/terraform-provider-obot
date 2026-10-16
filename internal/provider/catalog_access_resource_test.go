@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -226,31 +227,96 @@ data "obot_mcp_access_rules" "remaining" {}`, ConfigPlanChecks: resource.ConfigP
 		}},
 	}})
 }
-func testAccCatalogConfig(sources string) string {
-	return fmt.Sprintf(`provider "obot" {}
-resource "obot_mcp_catalog_sources" "test" { sources = %[1]s }
-data "obot_mcp_catalog" "test" { id=obot_mcp_catalog_sources.test.catalog_id }
-`, sources)
+
+const catalogSourceAddress = "obot_mcp_catalog_source.primary"
+
+func testAccCatalogConfig(primary, extra string) string {
+	config := fmt.Sprintf(`provider "obot" {}
+resource "obot_mcp_catalog_source" "primary" { url = %q }
+`, primary)
+	if extra != "" {
+		config += fmt.Sprintf(`resource "obot_mcp_catalog_source" "extra" { url = %q }
+`, extra)
+	}
+	return config
 }
-func TestAccMCPCatalogSources_adoptReplaceRemove(t *testing.T) {
-	initial, next := testAccCatalogFixture(t)
-	conn := testAccTunnelClient(t)
+
+// testAccCatalogSources makes the default catalog hold exactly the given
+// sources, in the state a UI user would leave it, and restores the shipped
+// source when the test ends.
+func testAccCatalogSources(t *testing.T, conn *client.Client, initial string, sources ...string) {
+	t.Helper()
+	set := func(ctx context.Context, sources []string) error {
+		_, err := conn.ModifyCatalogSources(ctx, func(s *client.CatalogSources) {
+			s.Sources = sources
+			s.GitCredentialIDs = map[string]string{}
+		})
+		return err
+	}
 	ctx, cancel := context.WithTimeout(t.Context(), catalogSyncTimeout)
 	defer cancel()
-	before, err := conn.WaitCatalogIdle(ctx, "default")
+	if err := set(ctx, sources); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), catalogSyncTimeout)
+		defer cancel()
+		if err := set(ctx, []string{initial}); err != nil {
+			t.Error(err)
+		}
+	})
+}
+
+// testAccCatalogState checks the default catalog's sources, in order, and
+// that each source's entries, and the API-created entry, are present.
+func testAccCatalogState(ctx context.Context, conn *client.Client, manualID string, want map[string]string, order ...string) error {
+	catalog, err := conn.GetCatalog(ctx, "default")
 	if err != nil {
-		t.Fatal(err)
+		return err
 	}
-	if !reflect.DeepEqual(before.Sources, []string{initial}) {
-		t.Fatal("fresh instance does not use the shipped fixture source")
+	if catalog.IsSyncing || len(catalog.SyncErrors) > 0 {
+		return fmt.Errorf("catalog has not completed a successful sync: %v", catalog.SyncErrors)
 	}
-	if _, err = conn.RefreshCatalog(ctx, "default", before.LastSynced); err != nil {
-		t.Fatal(err)
+	if !reflect.DeepEqual(catalog.Sources, order) {
+		return fmt.Errorf("sources = %v, want %v", catalog.Sources, order)
 	}
+	entries, err := conn.ListCatalogEntries(ctx, "default")
+	if err != nil {
+		return err
+	}
+	found := map[string]string{}
+	foundManual := manualID == ""
+	for _, entry := range entries {
+		if entry.ID == manualID {
+			foundManual = true
+		} else if entry.SourceURL != "" {
+			found[entry.SourceURL] = entry.Manifest.Name
+		}
+	}
+	if !foundManual {
+		return fmt.Errorf("the API-created entry was removed")
+	}
+	if !reflect.DeepEqual(found, want) {
+		return fmt.Errorf("source entries = %v, want %v", found, want)
+	}
+	return nil
+}
+
+func testAccCatalogExtra(t *testing.T) string {
+	t.Helper()
+	extra := os.Getenv("OBOT_TEST_CATALOG_SOURCE_EXTRA")
+	if extra == "" {
+		t.Fatal("catalog fixtures are required; use make test-acceptance-fresh")
+	}
+	return extra
+}
+
+func testAccManualEntry(t *testing.T) string {
+	t.Helper()
 	var manual struct {
 		ID string `json:"id"`
 	}
-	if err := testAccAPI(t.Context(), "POST", "/mcp-catalogs/default/entries", map[string]any{"name": "Terraform manual entry", "shortDescription": "API-created control", "description": "Preserved during source replacement", "icon": "test", "runtime": "npx", "npxConfig": map[string]string{"package": "@example/terraform-fixture"}}, &manual); err != nil {
+	if err := testAccAPI(t.Context(), "POST", "/mcp-catalogs/default/entries", map[string]any{"name": "Terraform manual entry", "shortDescription": "API-created control", "description": "Preserved when sources change", "icon": "test", "runtime": "npx", "npxConfig": map[string]string{"package": "@example/terraform-fixture"}}, &manual); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -276,81 +342,97 @@ func TestAccMCPCatalogSources_adoptReplaceRemove(t *testing.T) {
 			}
 		}
 	})
-	checks := func(source, name string) []statecheck.StateCheck {
-		return []statecheck.StateCheck{tunnelStateCheck{address: "obot_mcp_catalog_sources.test", check: func(ctx context.Context, _ map[string]any) error {
-			catalog, err := conn.GetCatalog(ctx, "default")
-			if err != nil {
-				return err
-			}
-			if catalog.IsSyncing || len(catalog.SyncErrors) > 0 {
-				return fmt.Errorf("catalog has not completed a successful sync")
-			}
-			entries, err := conn.ListCatalogEntries(ctx, "default")
-			if err != nil {
-				return err
-			}
-			foundManual, foundSource := false, false
-			for _, entry := range entries {
-				if entry.ID == manual.ID {
-					foundManual = true
-					continue
-				}
-				if entry.SourceURL != "" {
-					if entry.SourceURL != source || entry.Manifest.Name != name {
-						return fmt.Errorf("unexpected source-owned entry remains: %s", entry.ID)
-					}
-					foundSource = true
-				}
-			}
-			if !foundManual || (source != "" && !foundSource) {
-				return fmt.Errorf("catalog lost the manual entry or failed to install its source entries")
-			}
-			return nil
+	return manual.ID
+}
+
+// The shipped source stands in for one an administrator added in the UI.
+func TestAccMCPCatalogSource_leavesOtherSources(t *testing.T) {
+	initial, next := testAccCatalogFixture(t)
+	extra := testAccCatalogExtra(t)
+	conn := testAccTunnelClient(t)
+	testAccCatalogSources(t, conn, initial, initial)
+	manual := testAccManualEntry(t)
+	check := func(want map[string]string, order ...string) []statecheck.StateCheck {
+		return []statecheck.StateCheck{tunnelStateCheck{address: catalogSourceAddress, check: func(ctx context.Context, _ map[string]any) error {
+			return testAccCatalogState(ctx, conn, manual, want, order...)
 		}}}
 	}
-	imported := testAccCatalogConfig(fmt.Sprintf("[%q]", initial)) + `import {
- to=obot_mcp_catalog_sources.test
- id="default"
-}
-`
 	resource.Test(t, resource.TestCase{PreCheck: func() { testAccPreCheck(t) }, ProtoV6ProviderFactories: testAccProtoV6ProviderFactories, CheckDestroy: func(_ *terraform.State) error {
-		catalog, err := conn.GetCatalog(t.Context(), "default")
-		if err != nil {
-			return err
-		}
-		if len(catalog.Sources) != 0 || catalog.IsSyncing {
-			return fmt.Errorf("destroy did not clear sources while preserving the default catalog")
+		if err := testAccCatalogState(t.Context(), conn, manual, map[string]string{initial: "Shipped Tool"}, initial); err != nil {
+			return fmt.Errorf("destroy changed a source Terraform does not manage: %w", err)
 		}
 		if err := testAccRestartObot(t, conn); err != nil {
 			return err
 		}
-		catalog, err = conn.GetCatalog(t.Context(), "default")
+		catalog, err := conn.GetCatalog(t.Context(), "default")
 		if err != nil {
 			return err
 		}
-		if len(catalog.Sources) != 0 {
-			return fmt.Errorf("startup restored removed catalog sources")
+		if !reflect.DeepEqual(catalog.Sources, []string{initial}) {
+			return fmt.Errorf("startup changed catalog sources: %v", catalog.Sources)
 		}
 		return nil
 	}, Steps: []resource.TestStep{
-		{Config: imported, ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction("obot_mcp_catalog_sources.test", plancheck.ResourceActionNoop)}}, ConfigStateChecks: checks(initial, "Shipped Tool")},
-		{ResourceName: "obot_mcp_catalog_sources.test", ImportState: true, ImportStateId: "default", ImportStateVerify: true, ImportStateVerifyIdentifierAttribute: "catalog_id"},
-		{Config: testAccCatalogConfig(fmt.Sprintf("[%q]", next)), ConfigStateChecks: checks(next, "Replacement Tool")},
-		{Config: testAccCatalogConfig(`[]`), ConfigStateChecks: checks("", "")},
-		{Config: testAccCatalogConfig(fmt.Sprintf("[%q]", next)), ConfigStateChecks: checks(next, "Replacement Tool")},
+		{
+			Config: testAccCatalogConfig(next, extra),
+			ConfigStateChecks: []statecheck.StateCheck{
+				tunnelStateCheck{address: catalogSourceAddress, check: func(ctx context.Context, _ map[string]any) error {
+					catalog, err := conn.GetCatalog(ctx, "default")
+					if err != nil {
+						return err
+					}
+					// Both resources apply concurrently, so their order may vary.
+					if len(catalog.Sources) != 3 || catalog.Sources[0] != initial || !slices.Contains(catalog.Sources, next) || !slices.Contains(catalog.Sources, extra) {
+						return fmt.Errorf("sources = %v, want the UI source first and both Terraform sources", catalog.Sources)
+					}
+					return testAccCatalogState(ctx, conn, manual, map[string]string{initial: "Shipped Tool", next: "Replacement Tool", extra: "Extra Tool"}, catalog.Sources...)
+				}},
+				statecheck.ExpectKnownValue(catalogSourceAddress, tfjsonpath.New("id"), knownvalue.StringExact(next)),
+				statecheck.ExpectIdentity(catalogSourceAddress, map[string]knownvalue.Check{"url": knownvalue.StringExact(next)}),
+			},
+		},
+		{Config: testAccCatalogConfig(next, ""), ConfigStateChecks: check(map[string]string{initial: "Shipped Tool", next: "Replacement Tool"}, initial, next)},
+		{Config: testAccCatalogConfig(next, ""), ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()}}},
+		{ResourceName: catalogSourceAddress, ImportState: true, ImportStateKind: resource.ImportCommandWithID, ImportStateId: next, ImportStateVerify: true},
+		{ResourceName: catalogSourceAddress, ImportState: true, ImportStateKind: resource.ImportBlockWithID, ImportStateId: next},
+		{ResourceName: catalogSourceAddress, ImportState: true, ImportStateKind: resource.ImportBlockWithResourceIdentity},
 	}})
 }
-func TestAccMCPCatalogSources_drift(t *testing.T) {
-	initial, _ := testAccCatalogFixture(t)
+
+func TestAccMCPCatalogSource_adoptExisting(t *testing.T) {
+	initial, next := testAccCatalogFixture(t)
 	conn := testAccTunnelClient(t)
+	testAccCatalogSources(t, conn, initial, initial, next)
+	adopted := testAccCatalogConfig(initial, "") + fmt.Sprintf(`import {
+ to = %s
+ id = %q
+}
+`, catalogSourceAddress, initial)
+	resource.Test(t, resource.TestCase{PreCheck: func() { testAccPreCheck(t) }, ProtoV6ProviderFactories: testAccProtoV6ProviderFactories, CheckDestroy: func(_ *terraform.State) error {
+		return testAccCatalogState(t.Context(), conn, "", map[string]string{next: "Replacement Tool"}, next)
+	}, Steps: []resource.TestStep{
+		{Config: testAccCatalogConfig(initial, ""), ExpectError: regexp.MustCompile(`MCP Catalog Source Already\s+Exists`)},
+		{Config: adopted, ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction(catalogSourceAddress, plancheck.ResourceActionNoop)}}, ConfigStateChecks: []statecheck.StateCheck{tunnelStateCheck{address: catalogSourceAddress, check: func(ctx context.Context, _ map[string]any) error {
+			return testAccCatalogState(ctx, conn, "", map[string]string{initial: "Shipped Tool", next: "Replacement Tool"}, initial, next)
+		}}}},
+	}})
+}
+
+func TestAccMCPCatalogSource_removedInUI(t *testing.T) {
+	initial, next := testAccCatalogFixture(t)
+	conn := testAccTunnelClient(t)
+	testAccCatalogSources(t, conn, initial, initial)
 	resource.Test(t, resource.TestCase{PreCheck: func() { testAccPreCheck(t) }, ProtoV6ProviderFactories: testAccProtoV6ProviderFactories, Steps: []resource.TestStep{
-		{Config: testAccCatalogConfig(`[]`), ConfigStateChecks: []statecheck.StateCheck{tunnelStateCheck{address: "obot_mcp_catalog_sources.test", check: func(ctx context.Context, _ map[string]any) error {
-			_, err := conn.UpdateCatalogSources(ctx, "default", client.CatalogSources{Sources: []string{initial}})
+		{Config: testAccCatalogConfig(next, ""), ConfigStateChecks: []statecheck.StateCheck{tunnelStateCheck{address: catalogSourceAddress, check: func(ctx context.Context, _ map[string]any) error {
+			_, err := conn.ModifyCatalogSources(ctx, removeSource(next))
 			return err
 		}}}, ExpectNonEmptyPlan: true},
-		{Config: testAccCatalogConfig(`[]`)},
+		{Config: testAccCatalogConfig(next, ""), ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction(catalogSourceAddress, plancheck.ResourceActionCreate)}}, ConfigStateChecks: []statecheck.StateCheck{tunnelStateCheck{address: catalogSourceAddress, check: func(ctx context.Context, _ map[string]any) error {
+			return testAccCatalogState(ctx, conn, "", map[string]string{initial: "Shipped Tool", next: "Replacement Tool"}, initial, next)
+		}}}},
 	}})
 }
+
 func TestAccCurrentAuthProvider_basic(t *testing.T) {
 	resource.Test(t, resource.TestCase{PreCheck: func() { testAccPreCheck(t) }, ProtoV6ProviderFactories: testAccProtoV6ProviderFactories, Steps: []resource.TestStep{
 		{Config: `provider "obot" {}

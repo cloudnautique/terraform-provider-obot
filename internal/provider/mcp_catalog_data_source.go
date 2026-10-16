@@ -85,17 +85,23 @@ func (d *mcpCatalogDataSource) Read(ctx context.Context, req datasource.ReadRequ
 		resp.Diagnostics.AddError("Error Reading MCP Catalog Entries", err.Error())
 		return
 	}
-	sources := catalogSourcesModel{}
-	sources.fromAPI(ctx, result, &resp.Diagnostics)
+	if result.Sources == nil {
+		result.Sources = []string{}
+	}
+	if result.GitCredentialIDs == nil {
+		result.GitCredentialIDs = map[string]string{}
+	}
+	var diagnostics diag.Diagnostics
 	model.DisplayName = types.StringValue(result.DisplayName)
-	model.Sources = sources.Sources
-	model.GitCredentialIDs = sources.GitCredentialIDs
+	model.Sources, diagnostics = types.SetValueFrom(ctx, types.StringType, result.Sources)
+	resp.Diagnostics.Append(diagnostics...)
+	model.GitCredentialIDs, diagnostics = types.MapValueFrom(ctx, types.StringType, result.GitCredentialIDs)
+	resp.Diagnostics.Append(diagnostics...)
 	model.LastSynced = types.StringValue(result.LastSynced)
 	model.IsSyncing = types.BoolValue(result.IsSyncing)
 	if result.SyncErrors == nil {
 		result.SyncErrors = map[string]string{}
 	}
-	var diagnostics diag.Diagnostics
 	model.SyncErrors, diagnostics = types.MapValueFrom(ctx, types.StringType, result.SyncErrors)
 	resp.Diagnostics.Append(diagnostics...)
 	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })

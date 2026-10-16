@@ -1,27 +1,53 @@
 ---
-page_title: "Adopt and replace MCP catalogs and access policies"
+page_title: "Manage MCP catalog sources and access policies"
 subcategory: ""
 description: |-
-  Adopt shipped MCP catalog sources, replace their entries, inspect the authentication provider, and import or remove the Everything access policy.
+  Add, adopt, and remove MCP catalog sources, inspect the authentication provider, and import or remove the Everything access policy.
 ---
 
-# Adopt and replace MCP catalogs and access policies
+# Manage MCP catalog sources and access policies
 
 This guide covers five installation workflows. Use an Obot **Admin or Owner**
 API-scoped token. Configure the provider as described on its landing page.
 The examples are module snippets; declare `obot-platform/obot` in the root
-module. These resources manage the default MCP catalog's sources and the
+module. These resources manage individual sources of the default MCP catalog and the
 policies shown under **MCP Servers > Access Policies**. vMCP profiles are
 separate and are outside this guide.
 
-## 1. Bring shipped catalog entries under management
+## 1. Manage catalog sources
 
-Git continues to own entry definitions. Terraform manages which sources Obot
-synchronizes; it does not take ownership of individual Git-owned entries.
-There can be only one `obot_mcp_catalog_sources` resource per installation.
-The source collection is authoritative, so include every desired source.
+Each `obot_mcp_catalog_source` manages one source of the default catalog,
+exactly as adding a source under **MCP Servers** in the Obot UI does. Terraform
+changes only the sources it manages: sources added in the UI, and their
+credentials, are left as they are, and do not appear in plans. Git continues to
+own entry definitions; Terraform does not take ownership of individual entries.
 
-First inspect the current configuration using read-only data sources:
+Add a source:
+
+{{ tffile "examples/resources/obot_mcp_catalog_source/resource.tf" }}
+
+```shell
+terraform plan -out=add-source.tfplan
+terraform apply add-source.tfplan
+```
+
+The provider adds the source, requests a sync, and waits up to five minutes for
+it to complete. Use a complete HTTPS URL, including the desired Git ref and
+subdirectory; the URL identifies the source, so use one URL per resource and
+change it only by replacing the resource. To read a private source, create a
+Git credential in Obot and set `git_credential_id`. When it is unset, Obot keeps
+any token stored for the source in the UI, and Terraform never reads it.
+
+A sync error for the source fails apply and names the error. Correct the URL,
+credential, or connectivity and apply again. Errors in other sources do not
+affect the resource. Obot may keep the entries from a source's last successful
+sync, so a failed apply is not proof that entries changed.
+
+## 2. Adopt or remove existing sources
+
+Creating a source that already exists fails, so Terraform never takes over a
+source someone else added. To bring an existing source, such as the shipped
+catalog, under management, import it. First inspect the live configuration:
 
 {{ tffile "examples/data-sources/obot_mcp_catalog/data-source.tf" }}
 
@@ -36,13 +62,8 @@ data.obot_mcp_catalog.default.entries
 data.obot_mcp_access_rules.current.rules
 ```
 
-Copy the live source URLs and Git credential references into your variable
-values. If the data is not yet available in console, apply the data-source-only
-configuration first; doing so makes no changes in Obot. Save those values as
-your desired configuration rather than continuously assigning a resource's
-inputs from a live lookup of that same resource.
-
-Add the source resource and import block:
+Copy the source URL and any Git credential ID into the configuration, and add
+an import block:
 
 {{ tffile "examples/guides/catalog-adoption/main.tf" }}
 
@@ -51,60 +72,37 @@ terraform plan -out=adopt.tfplan
 terraform apply adopt.tfplan
 ```
 
-Review the plan: adoption should show an import with **no remote updates**.
-Import only reads existing configuration. A differing URL or credential map
-means the plan also changes Obot, so correct the configuration first if you
-intend a pure adoption. Complete HTTPS URLs are required; include the desired
-Git ref and subdirectory. Existing legacy inline credentials for retained
-sources are preserved by Obot and are never exposed in Terraform state.
-To reference shared Git credentials, create them in Obot and supply their IDs.
-
-You can instead remove the import block and run:
+The plan should show an import with **no remote updates**. A differing
+credential ID means the plan also changes Obot, so correct the configuration
+first if you intend a pure adoption. After adoption, remove the import block.
+CLI import takes the source URL as the ID:
 
 ```shell
-terraform import obot_mcp_catalog_sources.default default
-terraform plan
+terraform import obot_mcp_catalog_source.shipped https://github.com/obot-platform/mcp-catalog/v2-schema
 ```
 
-## 2. Replace shipped entries with your own catalog
+Obot replaces the legacy `https://github.com/obot-platform/mcp-catalog` URL
+with its configured default catalog path every time it starts, so the provider
+rejects it. Import the URL the catalog currently lists instead.
 
-After adoption, remove the source import block and change the desired sources:
+To remove a source and the entries it provides, delete its resource and apply.
+Only that source is removed. Running servers and API-created entries are kept.
+A source URL participates in entry identity; references to its entries,
+including those in existing vMCPs, are not rewritten. To replace the shipped
+catalog with your own, adopt the shipped source, add yours, and then remove the
+shipped resource. Removing every source does not restore shipped defaults on
+restart: on Obot v0.26.3 and the tested main image, startup only creates the
+default catalog's sources when the catalog does not exist.
 
-```hcl
-mcp_catalog_sources = [
-  "https://github.com/example/obot-catalog/tree/main/mcp",
-]
-mcp_catalog_git_credential_ids = {}
-```
+If someone removes a managed source in the UI, the next plan adds it back.
+`terraform state rm`, or a `removed` block with `destroy = false`, stops
+managing a source and leaves it in Obot.
 
-Include credential references for private sources. Apply a reviewed plan:
-
-```shell
-terraform plan -out=replace-catalog.tfplan
-terraform apply replace-catalog.tfplan
-```
-
-The provider updates sources, explicitly requests synchronization, and waits
-up to five minutes for a new successful sync. Obot removes entries belonging
-to removed sources and loads entries from the replacement sources.
-API-created entries are preserved. A source URL participates in entry identity;
-references to old entry IDs, including references in existing vMCPs, are not
-rewritten automatically.
-
-To remove all source-managed entries without adding replacements, retain the
-resource and set `mcp_catalog_sources = []`. Destroying the source resource
-also clears its sources and credential references. It preserves the default
-catalog; it does not restore shipped defaults. On Obot v0.26.3 and the tested
-main image, keeping the default catalog prevents startup from re-adding the
-shipped source list. The provider does not change the server's startup settings.
-
-A synchronization error fails apply. Obot may retain old entries when any
-source fails, so a failed apply is not proof that replacement completed.
-Inspect `data.obot_mcp_catalog.default.sync_errors` or the Obot UI, correct
-URLs, credentials, or connectivity, and plan again. After a transient error
-with no configuration change, request another sync from the Obot UI, wait
-for it to complete successfully, then run `terraform plan` again. A no-op
-Terraform plan does not initiate a sync.
+Obot only accepts the complete source list, so the provider reads the list,
+changes its source, and writes it back, as the UI does. Sources in one apply
+are written one at a time, and an edit replaced by a simultaneous change is
+applied again. A change made in the UI at the same moment as an apply can
+still be lost, so avoid editing sources in the UI during an apply.
 
 ## 3. Get the current authentication provider
 
@@ -166,7 +164,9 @@ terraform apply remove-everything.tfplan
 
 The plan should show deletion of that one `obot_mcp_access_rule`. Other
 policies remain in place. Grants are additive, so deleting Everything does
-not revoke access granted by another policy. On the tested Obot versions,
+not revoke access granted by another policy. Users who have no other policy
+lose access to every catalog server, and the catalog looks empty to them;
+create the policies you need before removing Everything. On the tested Obot versions,
 startup does not recreate this seed policy while the default MCP catalog exists.
 
 `terraform state rm` merely stops Terraform tracking the rule and leaves it

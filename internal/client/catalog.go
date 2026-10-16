@@ -6,15 +6,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"regexp"
+	"slices"
 	"time"
 )
 
-var objectIDPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,251}[a-z0-9])?$`)
+// ObjectIDPattern matches Obot object names, which contain no URL path delimiters.
+var ObjectIDPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,251}[a-z0-9])?$`)
 
 // ValidObjectID accepts an Obot object name without URL path delimiters.
-func ValidObjectID(id string) bool { return objectIDPattern.MatchString(id) }
+func ValidObjectID(id string) bool { return ObjectIDPattern.MatchString(id) }
 
 // Catalog contains public configuration only; inline legacy credentials are deliberately ignored.
 type Catalog struct {
@@ -28,6 +31,7 @@ type Catalog struct {
 }
 
 // CatalogSources is the complete source configuration, with no inline secret values.
+// Omitting inline credentials makes Obot keep any it stores for retained sources.
 type CatalogSources struct {
 	Sources          []string          `json:"sourceURLs"`
 	GitCredentialIDs map[string]string `json:"sourceURLGitCredentialIDs"`
@@ -66,6 +70,7 @@ func (c *Client) GetCatalog(ctx context.Context, id string) (*Catalog, error) {
 }
 
 // UpdateCatalogSources replaces the default catalog's complete source collection.
+// Use ModifyCatalogSources to change individual sources.
 func (c *Client) UpdateCatalogSources(ctx context.Context, id string, sources CatalogSources) (*Catalog, error) {
 	if id != "default" {
 		return nil, fmt.Errorf("only the default MCP catalog supports source management")
@@ -127,6 +132,7 @@ func (c *Client) WaitCatalogIdle(ctx context.Context, id string) (*Catalog, erro
 }
 
 // RefreshCatalog waits for a new, completed reconciliation, never accepting stale idle status.
+// Per-source failures are reported in the result's SyncErrors, keyed by source URL.
 // Obot timestamps have second precision, so the trigger must be issued after the prior timestamp.
 func (c *Client) RefreshCatalog(ctx context.Context, id, previous string) (*Catalog, error) {
 	path, err := catalogPath(id)
@@ -160,15 +166,62 @@ func (c *Client) RefreshCatalog(ctx context.Context, id, previous string) (*Cata
 		}
 		completed, parseErr := time.Parse(time.RFC3339Nano, result.LastSynced)
 		if !result.IsSyncing && parseErr == nil && completed.After(before) {
-			if len(result.SyncErrors) > 0 {
-				return result, fmt.Errorf("catalog synchronization failed for %d source(s); inspect the catalog's sync_errors or the Obot UI, correct the sources or credentials, and apply again", len(result.SyncErrors))
-			}
 			return result, nil
 		}
 		if err := waitCatalogPoll(ctx); err != nil {
 			return nil, fmt.Errorf("waiting for a new catalog synchronization: %w", err)
 		}
 	}
+}
+
+// maxCatalogEditAttempts bounds retries when a concurrent writer replaces the list.
+const maxCatalogEditAttempts = 3
+
+// ModifyCatalogSources edits the default catalog's sources as the Obot UI does:
+// it reads the latest list, applies change, writes the complete list back, and
+// waits for a new sync. Obot keeps stored credentials for sources the request
+// leaves in place. Edits through this client are serialized; because the API
+// has no conflict detection, change must be idempotent so the edit can be
+// re-applied if another writer replaced the list before the sync completed.
+// When change edits nothing, the current catalog is returned without a write.
+func (c *Client) ModifyCatalogSources(ctx context.Context, change func(*CatalogSources)) (*Catalog, error) {
+	c.catalogMu.Lock()
+	defer c.catalogMu.Unlock()
+	for range maxCatalogEditAttempts {
+		current, err := c.WaitCatalogIdle(ctx, "default")
+		if err != nil {
+			return nil, err
+		}
+		desired, changed := applyCatalogChange(current, change)
+		if !changed {
+			return current, nil
+		}
+		if _, err := c.UpdateCatalogSources(ctx, "default", desired); err != nil {
+			return nil, err
+		}
+		result, err := c.RefreshCatalog(ctx, "default", current.LastSynced)
+		if err != nil {
+			return nil, err
+		}
+		if _, lost := applyCatalogChange(result, change); !lost {
+			return result, nil
+		}
+	}
+	return nil, fmt.Errorf("another writer kept replacing the MCP catalog source list; apply again")
+}
+
+// applyCatalogChange returns the sources after change and whether they differ.
+func applyCatalogChange(catalog *Catalog, change func(*CatalogSources)) (CatalogSources, bool) {
+	before := CatalogSources{Sources: slices.Clone(catalog.Sources), GitCredentialIDs: maps.Clone(catalog.GitCredentialIDs)}
+	if before.Sources == nil {
+		before.Sources = []string{}
+	}
+	if before.GitCredentialIDs == nil {
+		before.GitCredentialIDs = map[string]string{}
+	}
+	after := CatalogSources{Sources: slices.Clone(before.Sources), GitCredentialIDs: maps.Clone(before.GitCredentialIDs)}
+	change(&after)
+	return after, !slices.Equal(before.Sources, after.Sources) || !maps.Equal(before.GitCredentialIDs, after.GitCredentialIDs)
 }
 
 func waitCatalogPoll(ctx context.Context) error {

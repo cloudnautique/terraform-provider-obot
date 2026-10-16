@@ -17,7 +17,7 @@ class CatalogFixtureTests(unittest.TestCase):
                 urllib.request.ProxyHandler({}),
                 urllib.request.HTTPSHandler(context=ssl.create_default_context(cafile=str(bundle))),
             )
-            for key, name in [("initial", b"Shipped Tool"), ("replacement", b"Replacement Tool")]:
+            for key, name in [("initial", b"Shipped Tool"), ("replacement", b"Replacement Tool"), ("extra", b"Extra Tool")]:
                 url = fixture[key].replace("host.docker.internal", "127.0.0.1")
                 with trusted.open(url, timeout=5) as response:
                     self.assertEqual(response.status, 200)

@@ -3,13 +3,13 @@
 A Terraform provider for Obot, built with the Terraform Plugin Framework.
 
 The provider connects with an API-scoped key and manages MCP tunnels,
-default MCP catalog sources, and catalog MCP access policies. Read-only data
+individual default MCP catalog sources, and catalog MCP access policies. Read-only data
 sources expose current identity, authentication-provider metadata, tunnel
 metadata, catalog inventory, and access policies. It is not yet published
 to the Terraform Registry.
 
 See the [catalog and access-policy guide](docs/guides/catalogs-and-access-policies.md)
-for adopting shipped entries, replacing catalog sources, looking up the
+for adding, adopting, and removing catalog sources, looking up the
 current authentication provider, and importing or removing Everything.
 See the [tunnel guide](docs/guides/mcp-tunnels.md) for tunnel credentials and import.
 
@@ -65,7 +65,7 @@ journalctl -u obot-discobox-network.service
 
 This configures network access; test instances still start with empty MCP
 catalog sources for manual development. Fresh acceptance instances instead
-use two deterministic catalogs served locally over verified HTTPS. They trust
+use three deterministic catalogs served locally over verified HTTPS. They trust
 a temporary test CA and allow the Docker host's private address; no public
 catalog or external GitHub credentials are needed for these fixtures. An upstream DNS or proxy rejection is reported by
 Obot and is not bypassed by the forwarder.
@@ -244,15 +244,15 @@ make test-acceptance-fresh OBOT_REF=main OBOT_INSTANCES=2
 make test-acceptance-fresh OBOT_REF=v0.26.3 OBOT_INSTANCES=2
 ```
 
-Fresh acceptance runs include tests that adopt and replace the default catalog's
-sources, preserve API-created entries, import the seeded Everything policy,
+Fresh acceptance runs include tests that add, adopt, and remove default catalog
+sources while leaving other sources and API-created entries in place, import the seeded Everything policy,
 and delete that policy while preserving another rule. The HTTPS fixture
 server and temporary CA live only for the run. `openssl` is required for
 these tests. `--keep` retains containers for diagnosis but stops the fixture
 server. Existing-instance runs skip tests that change seeded defaults unless
 `OBOT_TEST_MANAGE_DEFAULTS=1` is explicitly supplied; catalog tests also need
-`OBOT_TEST_CATALOG_SOURCE_INITIAL` and `OBOT_TEST_CATALOG_SOURCE_REPLACEMENT`
-pointing to deterministic, trusted fixture sources. Use fresh instances for
+`OBOT_TEST_CATALOG_SOURCE_INITIAL`, `OBOT_TEST_CATALOG_SOURCE_REPLACEMENT`, and
+`OBOT_TEST_CATALOG_SOURCE_EXTRA` pointing to deterministic, trusted fixture sources. Use fresh instances for
 the complete suite.
 
 Choose individual acceptance tests with

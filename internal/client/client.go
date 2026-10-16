@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -34,6 +35,9 @@ type Client struct {
 	token     string
 	userAgent string
 	http      *http.Client
+	// catalogMu serializes source list edits, which Obot accepts only as a
+	// complete list. A pointer keeps the value-receiver String methods valid.
+	catalogMu *sync.Mutex
 }
 
 // User describes the authenticated Obot identity.
@@ -85,6 +89,7 @@ func New(baseURL, token, userAgent string) (*Client, error) {
 		baseURL:   u.String(),
 		token:     token,
 		userAgent: userAgent,
+		catalogMu: &sync.Mutex{},
 		http: &http.Client{
 			Timeout: 30 * time.Second,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
@@ -139,6 +144,10 @@ func (c *Client) request(ctx context.Context, method, path, body string, result 
 	}
 	return nil
 }
+
+// Redact prepares a server-reported message, such as a catalog sync error, for
+// a diagnostic in the same way as an error response body.
+func (c *Client) Redact(message string) string { return c.sanitize([]byte(message)) }
 
 // sanitize turns an error body into a single diagnostic line. Redirect bodies
 // are dropped because they are HTML pages, not explanations.
