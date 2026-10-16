@@ -1,1 +1,1 @@
-terraform import obot_mcp_access_rule.administrators default/acr1-everything
+terraform import obot_mcp_access_rule.administrators acr1-everything

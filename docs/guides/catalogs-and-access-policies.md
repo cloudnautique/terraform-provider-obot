@@ -63,9 +63,7 @@ data "obot_mcp_catalog" "default" {
 ```
 
 ```terraform
-data "obot_mcp_access_rules" "current" {
-  catalog_id = "default"
-}
+data "obot_mcp_access_rules" "current" {}
 ```
 
 Run `terraform plan`, then use `terraform console` to inspect:
@@ -167,8 +165,7 @@ selecting by display name, which is not unique.
 
 ```terraform
 data "obot_mcp_access_rule" "everything" {
-  catalog_id = "default"
-  id         = "acr1-everything"
+  id = "acr1-everything"
 }
 ```
 
@@ -210,19 +207,19 @@ resource "obot_mcp_access_rule" "everything" {
 
 import {
   to = obot_mcp_access_rule.everything
-  id = "default/${var.everything_policy_id}"
+  id = var.everything_policy_id
 }
 ```
 
 Use the same plan-and-apply adoption flow as above. The plan should import
-`default/<rule-id>` without updating or replacing the existing policy.
+the rule without updating or replacing the existing policy.
 Import makes no policy API writes. After adoption, remove the import block;
 future changes to the resource update that policy in place.
 
 CLI import is also supported:
 
 ```shell
-terraform import obot_mcp_access_rule.everything default/acr1-everything
+terraform import obot_mcp_access_rule.everything acr1-everything
 terraform plan
 ```
 

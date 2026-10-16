@@ -28,5 +28,5 @@ resource "obot_mcp_access_rule" "everything" {
 
 import {
   to = obot_mcp_access_rule.everything
-  id = "default/${var.everything_policy_id}"
+  id = var.everything_policy_id
 }

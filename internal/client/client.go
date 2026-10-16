@@ -40,6 +40,12 @@ type Client struct {
 	catalogMu *sync.Mutex
 }
 
+// Obot role bits, as defined by the Obot API.
+const (
+	RoleOwner = 1 << 3
+	RoleAdmin = 1 << 4
+)
+
 // User describes the authenticated Obot identity.
 type User struct {
 	ID            string `json:"id"`
@@ -47,6 +53,16 @@ type User struct {
 	EffectiveRole int    `json:"effectiveRole"`
 	Email         string `json:"email"`
 	Username      string `json:"username"`
+}
+
+// IsAdmin reports whether the user is an Obot Owner or Admin. EffectiveRole
+// is preferred; older Obot versions report only Role.
+func (u User) IsAdmin() bool {
+	role := u.EffectiveRole
+	if role == 0 {
+		role = u.Role
+	}
+	return role&(RoleOwner|RoleAdmin) != 0
 }
 
 // HTTPError identifies API failures. Message is the server's explanation,

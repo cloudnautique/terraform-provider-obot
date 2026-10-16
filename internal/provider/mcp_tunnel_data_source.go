@@ -49,17 +49,17 @@ func newTunnelDataModel(ctx context.Context, tunnel client.Tunnel, diagnostics *
 		ID:           types.StringValue(tunnel.ID),
 		DisplayName:  types.StringValue(tunnel.Manifest.DisplayName),
 		Description:  types.StringValue(tunnel.Manifest.Description),
-		AllowedURLs:  allowedURLsValue(ctx, tunnel.Manifest.AllowedURLs, diagnostics),
+		AllowedURLs:  stringSetValue(ctx, tunnel.Manifest.AllowedURLs, diagnostics),
 		TokenPreview: types.StringValue(tunnel.Token),
 	}
 }
 
-// allowedURLsValue converts an API allowlist, where nil means empty.
-func allowedURLsValue(ctx context.Context, urls []string, diagnostics *diag.Diagnostics) types.Set {
-	if urls == nil {
-		urls = []string{}
+// stringSetValue converts an API string list, where nil means empty.
+func stringSetValue(ctx context.Context, values []string, diagnostics *diag.Diagnostics) types.Set {
+	if values == nil {
+		values = []string{}
 	}
-	value, d := types.SetValueFrom(ctx, types.StringType, urls)
+	value, d := types.SetValueFrom(ctx, types.StringType, values)
 	diagnostics.Append(d...)
 	return value
 }

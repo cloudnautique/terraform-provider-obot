@@ -9,32 +9,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/obot-platform/terraform-provider-obot/internal/client"
 )
-
-type obotStringValidator struct{ identifier, defaultCatalog bool }
-
-func (v obotStringValidator) Description(context.Context) string {
-	if v.defaultCatalog {
-		return "Only the default MCP catalog supports source management; use default."
-	}
-	if v.identifier {
-		return "Use an Obot object ID consisting of lowercase letters, digits, or hyphens, starting and ending with a letter or digit."
-	}
-	return "Use a nonempty value without surrounding whitespace."
-}
-func (v obotStringValidator) MarkdownDescription(ctx context.Context) string {
-	return v.Description(ctx)
-}
-func (v obotStringValidator) ValidateString(ctx context.Context, req validator.StringRequest, resp *validator.StringResponse) {
-	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
-		return
-	}
-	s := req.ConfigValue.ValueString()
-	if s == "" || s != strings.TrimSpace(s) || (v.identifier && !client.ValidObjectID(s)) || (v.defaultCatalog && s != "default") {
-		resp.Diagnostics.AddAttributeError(req.Path, "Invalid Obot Configuration", v.Description(ctx))
-	}
-}
 
 // validCatalogSourceURL requires a complete HTTPS URL, which Obot stores
 // unchanged, so the configured value can identify the source.

@@ -14,8 +14,7 @@ Reads one catalog MCP access policy by exact ID, preserving its actual subjects 
 
 ```terraform
 data "obot_mcp_access_rule" "everything" {
-  catalog_id = "default"
-  id         = "acr1-everything"
+  id = "acr1-everything"
 }
 ```
 
@@ -26,12 +25,9 @@ data "obot_mcp_access_rule" "everything" {
 
 - `id` (String) The exact rule identifier, for example `acr1-everything`. A missing rule is an error.
 
-### Optional
-
-- `catalog_id` (String) The catalog to inspect; defaults to `default`.
-
 ### Read-Only
 
+- `catalog_id` (String) The catalog containing this policy, always `default`.
 - `display_name` (String) The policy's display name; names need not be unique.
 - `generated` (Boolean) Whether Obot generated this rule. Generated rules cannot be managed by the Terraform resource.
 - `resources` (Attributes Set) Actual resources covered by this policy. (see [below for nested schema](#nestedatt--resources))

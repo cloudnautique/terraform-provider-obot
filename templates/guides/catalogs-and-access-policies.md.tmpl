@@ -137,14 +137,14 @@ access.** Import preserves whichever subjects actually exist.
 {{ tffile "examples/guides/access-policy-adoption/main.tf" }}
 
 Use the same plan-and-apply adoption flow as above. The plan should import
-`default/<rule-id>` without updating or replacing the existing policy.
+the rule without updating or replacing the existing policy.
 Import makes no policy API writes. After adoption, remove the import block;
 future changes to the resource update that policy in place.
 
 CLI import is also supported:
 
 ```shell
-terraform import obot_mcp_access_rule.everything default/acr1-everything
+terraform import obot_mcp_access_rule.everything acr1-everything
 terraform plan
 ```
 

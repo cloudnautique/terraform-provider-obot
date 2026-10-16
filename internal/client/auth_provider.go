@@ -25,11 +25,7 @@ func (c *Client) CurrentAuthProvider(ctx context.Context) (*AuthProvider, error)
 	if err != nil {
 		return nil, err
 	}
-	role := user.EffectiveRole
-	if role == 0 {
-		role = user.Role
-	}
-	if role&(8|16) == 0 {
+	if !user.IsAdmin() {
 		return nil, fmt.Errorf("current auth provider lookup requires an Obot Admin or Owner token so staged replacement configuration is visible")
 	}
 	var result struct {

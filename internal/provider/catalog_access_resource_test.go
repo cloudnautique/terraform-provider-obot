@@ -134,8 +134,10 @@ func TestAccMCPAccessRule_basic(t *testing.T) {
 	wildcard := `[{type="selector",id="*"}]`
 	var id string
 	steps := []resource.TestStep{
-		{Config: testAccRuleConfig(name, wildcard, wildcard), ConfigStateChecks: []statecheck.StateCheck{testAccRuleExists(t, func(_ context.Context, v map[string]any) error { id, _ = v["id"].(string); return nil }), statecheck.ExpectKnownValue("data.obot_mcp_access_rule.test", tfjsonpath.New("display_name"), knownvalue.StringExact(name))}},
+		{Config: testAccRuleConfig(name, wildcard, wildcard), ConfigStateChecks: []statecheck.StateCheck{testAccRuleExists(t, func(_ context.Context, v map[string]any) error { id, _ = v["id"].(string); return nil }), statecheck.ExpectKnownValue("data.obot_mcp_access_rule.test", tfjsonpath.New("display_name"), knownvalue.StringExact(name)), statecheck.ExpectIdentity("obot_mcp_access_rule.test", map[string]knownvalue.Check{"id": knownvalue.NotNull()})}},
 		{ResourceName: "obot_mcp_access_rule.test", ImportState: true, ImportStateIdFunc: func(_ *terraform.State) (string, error) { return "default/" + id, nil }, ImportStateVerify: true},
+		{ResourceName: "obot_mcp_access_rule.test", ImportState: true, ImportStateKind: resource.ImportCommandWithID, ImportStateVerify: true},
+		{ResourceName: "obot_mcp_access_rule.test", ImportState: true, ImportStateKind: resource.ImportBlockWithResourceIdentity},
 		{Config: testAccRuleConfig(name+"-restricted", `[{type="obotGroup",id="admin"}]`, wildcard), ConfigStateChecks: []statecheck.StateCheck{testAccRuleExists(t, nil)}},
 	}
 	if os.Getenv("OBOT_TEST_CATALOG_SOURCE_INITIAL") != "" {

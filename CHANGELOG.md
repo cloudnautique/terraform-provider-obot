@@ -10,7 +10,8 @@ FEATURES:
 - Add the `obot_mcp_catalog_source` resource, which manages one default
   catalog source the way the Obot UI does, leaving other sources unchanged.
   It imports by source URL or resource identity and waits for the catalog to sync.
-- Add the `obot_mcp_access_rule` resource and the `obot_mcp_access_rule`,
+- Add the `obot_mcp_access_rule` resource, which imports by rule ID or resource
+  identity, and the `obot_mcp_access_rule`,
   `obot_mcp_access_rules`, `obot_mcp_catalog`, and `obot_current_auth_provider`
   data sources, with a guide for managing catalog sources and access policies.
 

@@ -163,7 +163,7 @@ func (m *tunnelResourceModel) setMetadata(ctx context.Context, tunnel *client.Tu
 	m.ID = types.StringValue(tunnel.ID)
 	m.DisplayName = types.StringValue(tunnel.Manifest.DisplayName)
 	m.Description = types.StringValue(tunnel.Manifest.Description)
-	m.AllowedURLs = allowedURLsValue(ctx, tunnel.Manifest.AllowedURLs, diagnostics)
+	m.AllowedURLs = stringSetValue(ctx, tunnel.Manifest.AllowedURLs, diagnostics)
 }
 
 // captureToken stores a complete token returned by create or rotation.

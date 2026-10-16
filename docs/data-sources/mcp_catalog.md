@@ -3,12 +3,12 @@
 page_title: "obot_mcp_catalog Data Source - obot"
 subcategory: ""
 description: |-
-  Reads an MCP catalog's sources, synchronization status, and entry inventory. Use to discover configuration before import. Reading never refreshes or changes the catalog. Git-owned entry definitions remain in Git; inline catalog credentials and server configurations are not exposed.
+  Reads an MCP catalog's sources, synchronization status, and entry inventory. Use to discover configuration before import. Reading never refreshes or changes the catalog. Git-owned entry definitions remain in Git; inline catalog credentials and server configurations are not exposed. Use an Admin, Owner, or Auditor token: Obot limits other tokens to the entries their access policies allow.
 ---
 
 # obot_mcp_catalog (Data Source)
 
-Reads an MCP catalog's sources, synchronization status, and entry inventory. Use to discover configuration before import. Reading never refreshes or changes the catalog. Git-owned entry definitions remain in Git; inline catalog credentials and server configurations are not exposed.
+Reads an MCP catalog's sources, synchronization status, and entry inventory. Use to discover configuration before import. Reading never refreshes or changes the catalog. Git-owned entry definitions remain in Git; inline catalog credentials and server configurations are not exposed. Use an Admin, Owner, or Auditor token: Obot limits other tokens to the entries their access policies allow.
 
 ## Example Usage
 

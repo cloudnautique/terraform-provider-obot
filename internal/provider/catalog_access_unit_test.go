@@ -13,7 +13,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
-	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
@@ -57,7 +56,7 @@ func TestManagementImportIdentifiers(t *testing.T) {
 		rule, valid bool
 	}{
 		{"source URL", "https://example.com/catalog.yaml", false, true}, {"catalog ID", "default", false, false}, {"plain HTTP", "http://example.com/catalog.yaml", false, false}, {"embedded credentials", "https://user:secret@example.com/catalog.yaml", false, false},
-		{"policy", "default/acr1-everything", true, true}, {"missing scope", "acr1-everything", true, false}, {"empty ID", "default/", true, false}, {"extra slash", "default/../acr1", true, false}, {"query injection", "default/acr1?x=y", true, false},
+		{"policy", "default/acr1-everything", true, true}, {"bare policy ID", "acr1-everything", true, true}, {"other catalog", "other/acr1-everything", true, false}, {"empty ID", "default/", true, false}, {"extra slash", "default/../acr1", true, false}, {"query injection", "default/acr1?x=y", true, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var r resource.Resource
@@ -224,16 +223,13 @@ func TestManagementSchemas(t *testing.T) {
 	}
 }
 
-func TestAccessRuleDataSourcesCollections(t *testing.T) {
+func TestMCPAccessRulesDataSourceList(t *testing.T) {
 	for _, test := range []struct {
-		name, body        string
-		plural, wantError bool
-		count             int
+		name, body string
+		count      int
 	}{
-		{"empty", `{"items":null}`, true, false, 0},
-		{"sorted", `{"items":[{"id":"acr2","mcpCatalogID":"default","displayName":"Second"},{"id":"acr1","mcpCatalogID":"default","displayName":"First"}]}`, true, false, 2},
-		{"single", `{"id":"acr1","mcpCatalogID":"default","displayName":"First","subjects":[{"type":"group","id":"okta/team"}],"resources":[]}`, false, false, 0},
-		{"scope mismatch", `{"id":"acr1","mcpCatalogID":"other"}`, false, true, 0},
+		{name: "empty", body: `{"items":null}`, count: 0},
+		{name: "sorted", body: `{"items":[{"id":"acr2","mcpCatalogID":"default","displayName":"Second"},{"id":"acr1","mcpCatalogID":"default","displayName":"First"}]}`, count: 2},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			conn := testManagementClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -242,26 +238,63 @@ func TestAccessRuleDataSourcesCollections(t *testing.T) {
 				}
 				_, _ = w.Write([]byte(test.body))
 			})
-			d := &mcpAccessRuleDataSource{client: conn, plural: test.plural}
+			d := &mcpAccessRulesDataSource{client: conn}
+			var schema datasource.SchemaResponse
+			d.Schema(t.Context(), datasource.SchemaRequest{}, &schema)
+			state := tfsdk.State{Schema: schema.Schema}
+			if diagnostics := state.Set(t.Context(), &accessRulesDataModel{CatalogID: types.StringNull(), Rules: types.ListNull(types.ObjectType{AttrTypes: accessRuleDataModel{}.attrTypes()})}); diagnostics.HasError() {
+				t.Fatal(diagnostics)
+			}
+			response := datasource.ReadResponse{State: state}
+			d.Read(t.Context(), datasource.ReadRequest{Config: tfsdk.Config(state)}, &response)
+			if response.Diagnostics.HasError() {
+				t.Fatal(response.Diagnostics)
+			}
+			var model accessRulesDataModel
+			if diagnostics := response.State.Get(t.Context(), &model); diagnostics.HasError() {
+				t.Fatal(diagnostics)
+			}
+			if model.Rules.IsNull() || len(model.Rules.Elements()) != test.count || model.CatalogID.ValueString() != "default" {
+				t.Fatalf("incorrect list: %v", model)
+			}
+			if test.count > 0 {
+				first, ok := model.Rules.Elements()[0].(types.Object)
+				if !ok || !first.Attributes()["id"].Equal(types.StringValue("acr1")) {
+					t.Fatal("policies not sorted")
+				}
+			}
+		})
+	}
+}
+
+func TestMCPAccessRuleDataSourceRead(t *testing.T) {
+	for _, test := range []struct {
+		name, body string
+		wantError  bool
+	}{
+		{name: "found", body: `{"id":"acr1","mcpCatalogID":"default","displayName":"First","subjects":[{"type":"group","id":"okta/team"}],"resources":[]}`},
+		{name: "scope mismatch", body: `{"id":"acr1","mcpCatalogID":"other"}`, wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			conn := testManagementClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != "GET" {
+					t.Error("data source mutated API")
+				}
+				_, _ = w.Write([]byte(test.body))
+			})
+			d := &mcpAccessRuleDataSource{client: conn}
 			var schema datasource.SchemaResponse
 			d.Schema(t.Context(), datasource.SchemaRequest{}, &schema)
 			var diagnostics diag.Diagnostics
-			object := accessRuleDataValue(t.Context(), client.AccessRule{ID: "acr1", CatalogID: "default"}, &diagnostics)
-			var state tfsdk.State
-			if test.plural {
-				raw, err := types.ObjectValueMust(map[string]attr.Type{"catalog_id": types.StringType, "rules": types.ListType{ElemType: object.Type(t.Context())}}, map[string]attr.Value{"catalog_id": types.StringNull(), "rules": types.ListNull(object.Type(t.Context()))}).ToTerraformValue(t.Context())
-				if err != nil {
-					t.Fatal(err)
-				}
-				state = tfsdk.State{Schema: schema.Schema, Raw: raw}
-			} else {
-				attrs := object.Attributes()
-				attrs["catalog_id"] = types.StringNull()
-				raw, err := types.ObjectValueMust(object.AttributeTypes(t.Context()), attrs).ToTerraformValue(t.Context())
-				if err != nil {
-					t.Fatal(err)
-				}
-				state = tfsdk.State{Schema: schema.Schema, Raw: raw}
+			config := newAccessRuleDataModel(t.Context(), client.AccessRule{ID: "acr1"}, &diagnostics)
+			config.CatalogID = types.StringNull()
+			config.Subjects = types.SetNull(types.ObjectType{AttrTypes: referenceAttrTypes})
+			config.Resources = types.SetNull(types.ObjectType{AttrTypes: referenceAttrTypes})
+			config.DisplayName, config.Generated = types.StringNull(), types.BoolNull()
+			state := tfsdk.State{Schema: schema.Schema}
+			diagnostics.Append(state.Set(t.Context(), &config)...)
+			if diagnostics.HasError() {
+				t.Fatal(diagnostics)
 			}
 			response := datasource.ReadResponse{State: state}
 			d.Read(t.Context(), datasource.ReadRequest{Config: tfsdk.Config(state)}, &response)
@@ -271,28 +304,12 @@ func TestAccessRuleDataSourcesCollections(t *testing.T) {
 			if test.wantError {
 				return
 			}
-			if test.plural {
-				var list types.List
-				if ds := response.State.GetAttribute(t.Context(), path.Root("rules"), &list); ds.HasError() {
-					t.Fatal(ds)
-				}
-				if list.IsNull() || len(list.Elements()) != test.count {
-					t.Fatal("incorrect plural collection shape")
-				}
-				if test.count > 0 {
-					first, ok := list.Elements()[0].(types.Object)
-					if !ok || !first.Attributes()["id"].Equal(types.StringValue("acr1")) {
-						t.Fatal("policies not sorted")
-					}
-				}
-			} else {
-				var subjects types.Set
-				if ds := response.State.GetAttribute(t.Context(), path.Root("subjects"), &subjects); ds.HasError() {
-					t.Fatal(ds)
-				}
-				if len(subjects.Elements()) != 1 {
-					t.Fatal("subject metadata missing")
-				}
+			var model accessRuleDataModel
+			if diagnostics := response.State.Get(t.Context(), &model); diagnostics.HasError() {
+				t.Fatal(diagnostics)
+			}
+			if len(model.Subjects.Elements()) != 1 || model.CatalogID.ValueString() != "default" {
+				t.Fatalf("rule metadata missing: %v", model)
 			}
 		})
 	}

@@ -162,7 +162,7 @@ func (r *mcpCatalogSourceResource) write(ctx context.Context, plan catalogSource
 	catalog, err := r.client.ModifyCatalogSources(ctx, ensureSource(url, plan.GitCredentialID.ValueString()))
 	if err != nil {
 		diagnostics.AddError("Error Updating MCP Catalog Source", err.Error())
-		catalog, err = r.client.GetCatalog(context.WithoutCancel(ctx), "default")
+		catalog, err = r.client.GetCatalog(context.WithoutCancel(ctx), defaultCatalogID)
 		if err != nil {
 			return
 		}
@@ -186,7 +186,7 @@ func (r *mcpCatalogSourceResource) Create(ctx context.Context, req resource.Crea
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	current, err := r.client.GetCatalog(ctx, "default")
+	current, err := r.client.GetCatalog(ctx, defaultCatalogID)
 	if err != nil {
 		resp.Diagnostics.AddError("Error Reading MCP Catalog", err.Error())
 		return
@@ -206,7 +206,7 @@ func (r *mcpCatalogSourceResource) Read(ctx context.Context, req resource.ReadRe
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	catalog, err := r.client.GetCatalog(ctx, "default")
+	catalog, err := r.client.GetCatalog(ctx, defaultCatalogID)
 	if client.IsNotFound(err) {
 		resp.State.RemoveResource(ctx)
 		return
