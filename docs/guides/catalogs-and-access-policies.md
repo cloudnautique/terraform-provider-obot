@@ -39,15 +39,29 @@ terraform apply add-source.tfplan
 ```
 
 The provider adds the source, requests a sync, and waits up to five minutes for
-it to complete. Use a complete HTTPS URL, including the desired Git ref and
+it to complete. Sources in one apply are written one at a time, and each gets
+its own five minutes once its turn comes. Use a complete HTTPS URL, including the desired Git ref and
 subdirectory; the URL identifies the source, so use one URL per resource and
 change it only by replacing the resource. Private sources need a Git
 credential; see below.
 
-A sync error for the source fails apply and names the error. Correct the URL,
-credential, or connectivity and apply again. Errors in other sources do not
-affect the resource. Obot may keep the entries from a source's last successful
-sync, so a failed apply is not proof that entries changed.
+A sync error for the source fails apply and names the error; errors in other
+sources do not affect the resource. What to do next depends on the operation:
+
+- **A new source** that fails to sync is marked tainted, so after you correct
+  the URL, credential, or connectivity, the next apply removes and re-adds it,
+  starting a new sync.
+- **A changed source** keeps its new configuration. A plan without further
+  changes to it does not start a sync, so after correcting the problem, such
+  as a token updated on its `obot_git_credential` or a transient network
+  failure, choose **Sync** on the MCP Servers page in Obot, or wait for Obot's
+  hourly sync.
+
+The same applies when Obot saves a source but its sync does not complete, for
+example within the five minutes; the error says whether Obot saved the source.
+While the last sync reported an error for a source, each plan shows it as a
+warning. Obot may keep the entries from a source's last successful sync, so a
+failed apply is not proof that entries changed.
 
 ### Private sources
 
@@ -127,7 +141,9 @@ data "obot_mcp_catalog" "default" {
 data "obot_mcp_access_rules" "current" {}
 ```
 
-Run `terraform plan`, then use `terraform console` to inspect:
+Run `terraform apply`. These data sources only read, so the apply changes
+nothing in Obot, but it saves their values for `terraform console`; after only
+a plan, the console shows `(known after apply)`. Then inspect:
 
 ```text
 data.obot_mcp_catalog.default.sources

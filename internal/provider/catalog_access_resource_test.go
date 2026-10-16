@@ -255,13 +255,13 @@ func testAccCatalogSources(t *testing.T, conn *client.Client, initial string, so
 		})
 		return err
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), catalogSyncTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), client.CatalogEditTimeout)
 	defer cancel()
 	if err := set(ctx, sources); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), catalogSyncTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), client.CatalogEditTimeout)
 		defer cancel()
 		if err := set(ctx, []string{initial}); err != nil {
 			t.Error(err)

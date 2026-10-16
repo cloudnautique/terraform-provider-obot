@@ -13,7 +13,6 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -35,9 +34,12 @@ type Client struct {
 	token     string
 	userAgent string
 	http      *http.Client
-	// catalogMu serializes source list edits, which Obot accepts only as a
-	// complete list. A pointer keeps the value-receiver String methods valid.
-	catalogMu *sync.Mutex
+	// catalogLock serializes source list edits, which Obot accepts only as a
+	// complete list. A one-slot channel, unlike a mutex, lets a waiting edit
+	// give up when its context ends.
+	catalogLock chan struct{}
+	// catalogEditTimeout bounds one source edit, from when it holds catalogLock.
+	catalogEditTimeout time.Duration
 }
 
 // Obot role bits, as defined by the Obot API.
@@ -102,10 +104,11 @@ func New(baseURL, token, userAgent string) (*Client, error) {
 	u.RawPath = ""
 
 	return &Client{
-		baseURL:   u.String(),
-		token:     token,
-		userAgent: userAgent,
-		catalogMu: &sync.Mutex{},
+		baseURL:            u.String(),
+		token:              token,
+		userAgent:          userAgent,
+		catalogLock:        make(chan struct{}, 1),
+		catalogEditTimeout: CatalogEditTimeout,
 		http: &http.Client{
 			Timeout: 30 * time.Second,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {

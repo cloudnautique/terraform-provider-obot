@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
@@ -39,6 +40,7 @@ type fakeCatalog struct {
 	// afterSync runs after each sync, to simulate another writer.
 	afterSync  func(*client.Catalog)
 	refreshErr int
+	putErr     int
 }
 
 func newFakeCatalog(t *testing.T, sources []string, ids map[string]string) (*fakeCatalog, *client.Client) {
@@ -53,6 +55,10 @@ func (f *fakeCatalog) serve(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/api/mcp-catalogs/default":
 	case r.Method == http.MethodPut && r.URL.Path == "/api/mcp-catalogs/default":
+		if f.putErr != 0 {
+			http.Error(w, "invalid Git credential reference", f.putErr)
+			return
+		}
 		var body map[string]json.RawMessage
 		var sources client.CatalogSources
 		raw := json.NewDecoder(r.Body)
@@ -234,8 +240,8 @@ func TestCatalogSourceSyncErrors(t *testing.T) {
 			if response.Diagnostics.HasError() != test.wantError {
 				t.Fatalf("diagnostics = %v", response.Diagnostics)
 			}
-			if test.wantError && !strings.Contains(response.Diagnostics.Errors()[0].Detail(), "repository not found") {
-				t.Fatal("sync error detail missing")
+			if test.wantError && (!strings.Contains(response.Diagnostics.Errors()[0].Detail(), "repository not found") || !strings.Contains(response.Diagnostics.Errors()[0].Detail(), "tainted")) {
+				t.Fatal("sync error detail or create advice missing")
 			}
 			if response.State.Raw.IsNull() {
 				t.Fatal("accepted source lost from state")
@@ -244,15 +250,63 @@ func TestCatalogSourceSyncErrors(t *testing.T) {
 	}
 }
 
-func TestCatalogSourceAcceptedWriteSurvivesRefreshFailure(t *testing.T) {
-	fake, conn := newFakeCatalog(t, nil, nil)
-	fake.refreshErr = http.StatusForbidden
-	response := testCreateSource(t, conn, testSourceModel())
-	if !response.Diagnostics.HasError() {
-		t.Fatal("refresh failure ignored")
+// A sync error stays visible on later plans, which cannot fix it by themselves.
+func TestCatalogSourceReadWarnsAboutSyncError(t *testing.T) {
+	fake, conn := newFakeCatalog(t, []string{testSourceURL, testOtherURL}, nil)
+	fake.catalog.SyncErrors = map[string]string{testSourceURL: "authentication required", testOtherURL: "other failure"}
+	r := &mcpCatalogSourceResource{client: conn}
+	state := testManagementState(t, r, testSourceModel())
+	response := resource.ReadResponse{State: state}
+	r.Read(t.Context(), resource.ReadRequest{State: state}, &response)
+	if response.Diagnostics.HasError() || response.Diagnostics.WarningsCount() != 1 {
+		t.Fatalf("diagnostics = %v", response.Diagnostics)
 	}
-	if response.State.Raw.IsNull() {
-		t.Fatal("accepted source lost from state")
+	detail := response.Diagnostics.Warnings()[0].Detail()
+	if !strings.Contains(detail, "authentication required") || strings.Contains(detail, "other failure") || !strings.Contains(detail, "Sync") {
+		t.Fatalf("warning = %q", detail)
+	}
+}
+
+// A failed edit says whether Obot saved the source and what happens next.
+func TestCatalogSourceEditFailureAdvice(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		creating   bool
+		refreshErr int
+		putErr     int
+		wantSaved  bool
+		want       string
+	}{
+		{name: "create saved, sync incomplete", creating: true, refreshErr: http.StatusForbidden, wantSaved: true, want: "tainted"},
+		{name: "update saved, sync incomplete", refreshErr: http.StatusForbidden, wantSaved: true, want: "choose Sync"},
+		{name: "create not saved", creating: true, putErr: http.StatusBadRequest, want: "did not save"},
+		{name: "update not saved", putErr: http.StatusBadRequest, want: "previous configuration"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sources := []string{testOtherURL}
+			if !test.creating {
+				sources = append(sources, testSourceURL)
+			}
+			fake, conn := newFakeCatalog(t, sources, map[string]string{testSourceURL: "gc1-old"})
+			fake.refreshErr, fake.putErr = test.refreshErr, test.putErr
+			r := &mcpCatalogSourceResource{client: conn}
+			plan := testManagementState(t, r, testSourceModel())
+			var diagnostics diag.Diagnostics
+			state := tfsdk.State{Schema: plan.Schema}
+			var planned catalogSourceModel
+			diagnostics.Append(plan.Get(t.Context(), &planned)...)
+			r.write(t.Context(), planned, test.creating, &state, nil, &diagnostics)
+			if !diagnostics.HasError() {
+				t.Fatal("failure ignored")
+			}
+			detail := diagnostics.Errors()[0].Detail()
+			if !strings.Contains(detail, test.want) || strings.Contains(detail, "saved the source") != test.wantSaved {
+				t.Fatalf("detail = %q", detail)
+			}
+			if state.Raw.IsNull() == (test.wantSaved || !test.creating) {
+				t.Fatalf("state saved = %v", !state.Raw.IsNull())
+			}
+		})
 	}
 }
 

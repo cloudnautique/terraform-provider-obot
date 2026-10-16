@@ -3,12 +3,12 @@
 page_title: "obot_mcp_catalog_source Resource - obot"
 subcategory: ""
 description: |-
-  Manages one source of the default MCP catalog, as adding a source in the Obot UI does. Other sources, including ones added in the UI, are left unchanged. The source owns the entries it provides. Creating, changing, or destroying a source waits up to five minutes for a new catalog sync. Destroy removes only this source; Obot then removes the entries it provided, while running servers and API-created entries are kept. A source that already exists in Obot must be imported. See the catalog and access-policy guide ../guides/catalogs-and-access-policies.md.
+  Manages one source of the default MCP catalog, as adding a source in the Obot UI does. Other sources, including ones added in the UI, are left unchanged. The source owns the entries it provides. Creating, changing, or destroying a source waits up to five minutes for a new catalog sync, counted from when its turn comes, since sources are written one at a time. Destroy removes only this source; Obot then removes the entries it provided, while running servers and API-created entries are kept. A source that already exists in Obot must be imported. See the catalog and access-policy guide ../guides/catalogs-and-access-policies.md.
 ---
 
 # obot_mcp_catalog_source (Resource)
 
-Manages one source of the default MCP catalog, as adding a source in the Obot UI does. Other sources, including ones added in the UI, are left unchanged. The source owns the entries it provides. Creating, changing, or destroying a source waits up to five minutes for a new catalog sync. Destroy removes only this source; Obot then removes the entries it provided, while running servers and API-created entries are kept. A source that already exists in Obot must be imported. See the [catalog and access-policy guide](../guides/catalogs-and-access-policies.md).
+Manages one source of the default MCP catalog, as adding a source in the Obot UI does. Other sources, including ones added in the UI, are left unchanged. The source owns the entries it provides. Creating, changing, or destroying a source waits up to five minutes for a new catalog sync, counted from when its turn comes, since sources are written one at a time. Destroy removes only this source; Obot then removes the entries it provided, while running servers and API-created entries are kept. A source that already exists in Obot must be imported. See the [catalog and access-policy guide](../guides/catalogs-and-access-policies.md).
 
 ## Example Usage
 

@@ -174,8 +174,13 @@ func (c *Client) RefreshCatalog(ctx context.Context, id, previous string) (*Cata
 	}
 }
 
-// maxCatalogEditAttempts bounds retries when a concurrent writer replaces the list.
-const maxCatalogEditAttempts = 3
+const (
+	// maxCatalogEditAttempts bounds retries when a concurrent writer replaces the list.
+	maxCatalogEditAttempts = 3
+	// CatalogEditTimeout bounds one source edit, including its sync. Time spent
+	// waiting behind other edits is not counted.
+	CatalogEditTimeout = 5 * time.Minute
+)
 
 // ModifyCatalogSources edits the default catalog's sources as the Obot UI does:
 // it reads the latest list, applies change, writes the complete list back, and
@@ -184,9 +189,17 @@ const maxCatalogEditAttempts = 3
 // has no conflict detection, change must be idempotent so the edit can be
 // re-applied if another writer replaced the list before the sync completed.
 // When change edits nothing, the current catalog is returned without a write.
+// The edit's timeout starts once it holds the lock, so sources queued behind
+// one another each get the full time.
 func (c *Client) ModifyCatalogSources(ctx context.Context, change func(*CatalogSources)) (*Catalog, error) {
-	c.catalogMu.Lock()
-	defer c.catalogMu.Unlock()
+	select {
+	case c.catalogLock <- struct{}{}:
+	case <-ctx.Done():
+		return nil, fmt.Errorf("waiting for other MCP catalog source edits: %w", ctx.Err())
+	}
+	defer func() { <-c.catalogLock }()
+	ctx, cancel := context.WithTimeout(ctx, c.catalogEditTimeout)
+	defer cancel()
 	for range maxCatalogEditAttempts {
 		current, err := c.WaitCatalogIdle(ctx, "default")
 		if err != nil {

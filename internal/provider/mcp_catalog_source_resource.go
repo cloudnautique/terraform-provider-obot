@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -21,8 +20,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/obot-platform/terraform-provider-obot/internal/client"
 )
-
-const catalogSyncTimeout = 5 * time.Minute
 
 var (
 	_ resource.Resource                = &mcpCatalogSourceResource{}
@@ -57,7 +54,7 @@ func (r *mcpCatalogSourceResource) Schema(_ context.Context, _ resource.SchemaRe
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manages one source of the default MCP catalog, as adding a source in the Obot UI does. " +
 			"Other sources, including ones added in the UI, are left unchanged. The source owns the entries it provides. " +
-			"Creating, changing, or destroying a source waits up to five minutes for a new catalog sync. " +
+			"Creating, changing, or destroying a source waits up to five minutes for a new catalog sync, counted from when its turn comes, since sources are written one at a time. " +
 			"Destroy removes only this source; Obot then removes the entries it provided, while running servers and API-created entries are kept. " +
 			"A source that already exists in Obot must be imported. " +
 			"See the [catalog and access-policy guide](../guides/catalogs-and-access-policies.md).",
@@ -154,30 +151,61 @@ func setCatalogSourceIdentity(ctx context.Context, identity *tfsdk.ResourceIdent
 	diagnostics.Append(identity.Set(ctx, catalogSourceIdentityModel{URL: url})...)
 }
 
+// resyncAdvice says how to retry a source whose configuration is already saved:
+// a plan without changes does not start a sync.
+const resyncAdvice = "After correcting the problem, choose Sync on the MCP Servers page in Obot, or wait for Obot's hourly sync. " +
+	"Applying again without a change to this source does not start one. Obot may keep the entries from the last successful sync."
+
+// taintAdvice says what follows a create that Obot saved but that failed:
+// Terraform taints the resource, so the next apply re-adds the source.
+const taintAdvice = "Terraform marks the source tainted, so the next apply removes and re-adds it, which starts a new sync."
+
 // write applies the planned source and saves it. A write Obot accepted is
-// saved even when synchronization then fails, so Terraform keeps tracking it.
-func (r *mcpCatalogSourceResource) write(ctx context.Context, plan catalogSourceModel, state *tfsdk.State, identity *tfsdk.ResourceIdentity, diagnostics *diag.Diagnostics) {
-	ctx, cancel := context.WithTimeout(ctx, catalogSyncTimeout)
-	defer cancel()
+// saved even when the edit then fails, such as when the sync times out, so
+// Terraform keeps tracking it; a failed create leaves the resource tainted, so
+// the next apply re-adds it. Each failure says whether Obot saved the source.
+func (r *mcpCatalogSourceResource) write(ctx context.Context, plan catalogSourceModel, creating bool, state *tfsdk.State, identity *tfsdk.ResourceIdentity, diagnostics *diag.Diagnostics) {
 	url := plan.URL.ValueString()
-	catalog, err := r.client.ModifyCatalogSources(ctx, ensureSource(url, plan.GitCredentialID.ValueString()))
-	if err != nil {
-		diagnostics.AddError("Error Updating MCP Catalog Source", err.Error())
+	planned := plan.GitCredentialID
+	catalog, editErr := r.client.ModifyCatalogSources(ctx, ensureSource(url, planned.ValueString()))
+	if editErr != nil {
+		var err error
 		catalog, err = r.client.GetCatalog(context.WithoutCancel(ctx), defaultCatalogID)
 		if err != nil {
+			diagnostics.AddError("Error Updating MCP Catalog Source", editErr.Error())
 			return
 		}
 	}
 	if !plan.setFromCatalog(catalog) {
+		if editErr != nil {
+			diagnostics.AddError("Error Updating MCP Catalog Source", editErr.Error()+"\n\nObot did not save the source.")
+		}
 		return
 	}
 	diagnostics.Append(state.Set(ctx, &plan)...)
 	setCatalogSourceIdentity(ctx, identity, plan.URL, diagnostics)
+	if editErr != nil {
+		next := "Obot kept the source's previous configuration, which the next plan shows."
+		if plan.GitCredentialID.Equal(planned) {
+			// The write was saved; only its sync is uncertain.
+			next = "Obot saved the source, but its sync did not complete. Check the source on the MCP Servers page in Obot. "
+			if creating {
+				next += taintAdvice
+			} else {
+				next += "If the sync failed or never ran, choose Sync there or wait for Obot's hourly sync. " +
+					"Applying again without a change to this source does not start one."
+			}
+		}
+		diagnostics.AddError("Error Updating MCP Catalog Source", editErr.Error()+"\n\n"+next)
+		return
+	}
 	if message, failed := catalog.SyncErrors[url]; failed && !diagnostics.HasError() {
+		next := resyncAdvice
+		if creating {
+			next = taintAdvice + " Correct the URL, credential, or connectivity first."
+		}
 		diagnostics.AddAttributeError(path.Root("url"), "MCP Catalog Source Failed to Sync",
-			fmt.Sprintf("Obot added the source but could not read it: %s\n\n"+
-				"Correct the URL, credential, or connectivity and apply again. Obot may keep the entries from the last successful sync.",
-				r.client.Redact(message)))
+			fmt.Sprintf("Obot saved the source but could not read it: %s\n\n%s", r.client.Redact(message), next))
 	}
 }
 
@@ -198,7 +226,7 @@ func (r *mcpCatalogSourceResource) Create(ctx context.Context, req resource.Crea
 				"using an import block or terraform import with the source URL as the ID.")
 		return
 	}
-	r.write(ctx, plan, &resp.State, resp.Identity, &resp.Diagnostics)
+	r.write(ctx, plan, true, &resp.State, resp.Identity, &resp.Diagnostics)
 }
 
 func (r *mcpCatalogSourceResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -222,6 +250,11 @@ func (r *mcpCatalogSourceResource) Read(ctx context.Context, req resource.ReadRe
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 	setCatalogSourceIdentity(ctx, resp.Identity, state.URL, &resp.Diagnostics)
+	// Keep reporting a sync error, since a plan without changes cannot fix it.
+	if message, failed := catalog.SyncErrors[state.URL.ValueString()]; failed {
+		resp.Diagnostics.AddAttributeWarning(path.Root("url"), "MCP Catalog Source Has a Sync Error",
+			fmt.Sprintf("Obot's last sync could not read this source: %s\n\n%s", r.client.Redact(message), resyncAdvice))
+	}
 }
 
 func (r *mcpCatalogSourceResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
@@ -230,7 +263,7 @@ func (r *mcpCatalogSourceResource) Update(ctx context.Context, req resource.Upda
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	r.write(ctx, plan, &resp.State, resp.Identity, &resp.Diagnostics)
+	r.write(ctx, plan, false, &resp.State, resp.Identity, &resp.Diagnostics)
 }
 
 func (r *mcpCatalogSourceResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -239,8 +272,6 @@ func (r *mcpCatalogSourceResource) Delete(ctx context.Context, req resource.Dele
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, catalogSyncTimeout)
-	defer cancel()
 	_, err := r.client.ModifyCatalogSources(ctx, removeSource(state.URL.ValueString()))
 	if err != nil && !client.IsNotFound(err) {
 		resp.Diagnostics.AddError("Error Removing MCP Catalog Source", err.Error())

@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -270,5 +272,80 @@ func TestAccessRuleClientWrites(t *testing.T) {
 	}
 	if !reflect.DeepEqual(methods, []string{"POST", "PUT", "DELETE"}) {
 		t.Fatal(methods)
+	}
+}
+
+// slowCatalog is a default catalog whose syncs take syncTime, as real ones do.
+func slowCatalog(t *testing.T, syncTime time.Duration) *Client {
+	t.Helper()
+	var mu sync.Mutex
+	catalog := Catalog{ID: "default", Sources: []string{}, LastSynced: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)}
+	var syncDone time.Time
+	return testCatalogClient(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if !syncDone.IsZero() && time.Now().After(syncDone) {
+			syncDone = time.Time{}
+			catalog.IsSyncing = false
+			// A past timestamp keeps RefreshCatalog from waiting out its one-second precision.
+			catalog.LastSynced = time.Now().Add(-2 * time.Second).UTC().Format(time.RFC3339Nano)
+		}
+		switch {
+		case r.Method == http.MethodPut:
+			var sources CatalogSources
+			if err := json.NewDecoder(r.Body).Decode(&sources); err != nil {
+				t.Error(err)
+			}
+			catalog.Sources = sources.Sources
+		case strings.HasSuffix(r.URL.Path, "/refresh"):
+			catalog.IsSyncing = true
+			syncDone = time.Now().Add(syncTime)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(catalog)
+	})
+}
+
+// Queued edits each get the full timeout: time spent waiting for the lock is not counted.
+func TestCatalogEditTimeoutExcludesLockWait(t *testing.T) {
+	conn := slowCatalog(t, 100*time.Millisecond)
+	// One edit takes about one 500ms poll; four in sequence take far longer than one timeout.
+	conn.catalogEditTimeout = 1500 * time.Millisecond
+	urls := []string{"https://example.com/a.yaml", "https://example.com/b.yaml", "https://example.com/c.yaml", "https://example.com/d.yaml"}
+	var wg sync.WaitGroup
+	for _, url := range urls {
+		wg.Go(func() {
+			if _, err := conn.ModifyCatalogSources(t.Context(), func(s *CatalogSources) {
+				if !slices.Contains(s.Sources, url) {
+					s.Sources = append(s.Sources, url)
+				}
+			}); err != nil {
+				t.Errorf("%s: %v", url, err)
+			}
+		})
+	}
+	wg.Wait()
+	catalog, err := conn.GetCatalog(t.Context(), "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, url := range urls {
+		if !slices.Contains(catalog.Sources, url) {
+			t.Errorf("lost %s: %v", url, catalog.Sources)
+		}
+	}
+}
+
+// A cancelled apply does not sit waiting for the lock.
+func TestCatalogEditLockWaitStopsOnCancel(t *testing.T) {
+	conn := slowCatalog(t, 0)
+	conn.catalogLock <- struct{}{}
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := conn.ModifyCatalogSources(ctx, func(*CatalogSources) {})
+	if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > time.Second {
+		t.Fatalf("err = %v after %v", err, time.Since(start))
 	}
 }
