@@ -244,11 +244,11 @@ Tests receive `OBOT_BASE_URL`, `OBOT_TOKEN`, `OBOT_TEST_EMAIL`, `TF_ACC=1`,
 and `OBOT_TEST_INSTANCES` (a JSON array of named connections). Tokens are not
 written to instance metadata.
 
-Inside Discobox, Make puts Go module/build and lint caches under ignored
-`.obot/cache/` on the workspace disk. This avoids the shared cache volume,
-which can fill independently of the workspace. Explicit `GOMODCACHE`,
-`GOCACHE`, and `GOLANGCI_LINT_CACHE` settings still take precedence.
-Outside Discobox, the tools keep their normal cache defaults.
+Manual test instances start with empty MCP catalog sources. Fresh acceptance
+instances use deterministic catalogs served locally over verified HTTPS: three
+public YAML files and a private Git repository requiring a token generated for
+the run. They trust a temporary test CA and allow the Docker host's private
+address; these fixtures need no public catalog or external GitHub credentials.
 
 The older `testacc`, `testacc-local`, and `obot-smoke` targets remain aliases
 for `test-acceptance-env`, `test-acceptance-fresh`, and `test-smoke`.
@@ -311,51 +311,6 @@ without connecting to Obot. Prefer the named Make targets for plan/apply so
 authentication and Terraform state stay associated with the same instance.
 
 Use `unset TF_CLI_CONFIG_FILE` to return to your normal Terraform settings.
-
-## Discobox setup
-
-Inside Discobox, prepare the environment once before starting test instances:
-
-```shell
-make discobox-bootstrap
-make obot-up OBOT_REF=v0.26.3
-```
-
-The bootstrap discovers the Docker bridge gateway, sandbox DNS resolver,
-`HTTPS_PROXY`, and CA bundle. It installs an idempotent systemd service that
-forwards UDP/TCP DNS on the bridge's port 53 and proxy traffic on port 18888
-to the sandbox's existing resolver and egress proxy. TLS verification remains
-enabled. It also checks that DNS forwarding is ready.
-
-The Obot launcher detects Discobox and adds the DNS server, host-gateway
-mapping, proxy variables, local proxy exclusions, and read-only CA mount to
-every new test container. Ordinary Docker development and GitHub Actions do
-not use this setup. Existing instances must be torn down and recreated to
-pick up the settings; their data is disposable.
-
-Obot's URL-checking HTTP client also checks the proxy address. For these
-Discobox instances, the launcher sets `OBOT_SERVER_DISALLOW_PRIVATE_IPMCP=false`
-so it can connect to the private Docker bridge. Tests specifically exercising
-private-address rejection need a configuration with that restriction enabled.
-
-`.discobox/services/10-bootstrap.sh` invokes the same target at boot. A new
-service declaration takes effect on the next boot; run the Make target for
-an already running box. The forwarder is shared by all test instances and
-survives individual instance teardown. Re-running bootstrap reuses it, or
-restarts it when its code or configuration changes. To inspect it:
-
-```shell
-systemctl status obot-discobox-network.service
-journalctl -u obot-discobox-network.service
-```
-
-This configures network access; test instances still start with empty MCP
-catalog sources for manual development. Fresh acceptance instances instead
-use deterministic catalogs served locally over verified HTTPS: three public
-YAML files and a private Git repository that requires a token generated for the run. They trust
-a temporary test CA and allow the Docker host's private address; no public
-catalog or external GitHub credentials are needed for these fixtures. An upstream DNS or proxy rejection is reported by
-Obot and is not bypassed by the forwarder.
 
 ## MCP tunnels
 

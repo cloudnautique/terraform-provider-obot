@@ -9,17 +9,8 @@ DOCS_PORT ?= 8765
 DOCS_PREVIEW_ENV = .obot/docs-preview/venv
 ACCEPTANCE_TEST = go test -count=1 -timeout=60m -run=TestAcc $(TESTARGS) ./internal/provider/...
 
-# Discobox shares the default Go cache volume across sandboxes. Keep this
-# checkout's caches on its own disk, and honor explicit caller overrides.
-ifneq ($(wildcard /etc/discobox/sandbox.json),)
-export GOCACHE ?= $(CURDIR)/.obot/cache/go-build
-export GOMODCACHE ?= $(CURDIR)/.obot/cache/go-mod
-export GOLANGCI_LINT_CACHE ?= $(CURDIR)/.obot/cache/golangci-lint
-endif
-
 help:
 	@printf '%s\n' \
-		'make discobox-bootstrap         Prepare DNS, proxy, and CA trust inside Discobox' \
 		'make test                       Run Go and Python unit tests; no Obot needed' \
 		'make test-acceptance            Run against existing Obot instance dev' \
 		'  OBOT_INSTANCE=NAME            Select another existing instance' \
@@ -43,9 +34,6 @@ build:
 	mkdir -p bin
 	go build -o bin/terraform-provider-obot .
 
-discobox-bootstrap:
-	python3 scripts/discobox_network.py bootstrap
-
 install:
 	go install .
 
@@ -64,7 +52,7 @@ generate:
 docs-preview: .obot/docs-preview/ready
 	"$(DOCS_PREVIEW_ENV)/bin/python" scripts/docs_preview.py --port "$(DOCS_PORT)"
 
-# Name the source directories so the Discobox caches under .obot/ are never rewritten.
+# Format only the project source directories.
 fmt:
 	gofmt -s -w main.go internal tools
 
@@ -134,6 +122,6 @@ dev-check: dev
 %-destroy: dev
 	python3 scripts/obot.py terraform "$*" destroy -- $(TFARGS)
 
-.PHONY: help discobox-bootstrap build install lint generate docs-preview fmt test test-go test-tooling \
+.PHONY: help build install lint generate docs-preview fmt test test-go test-tooling \
 	test-acceptance test-acceptance-env test-acceptance-fresh test-smoke \
 	testacc testacc-local obot-smoke dev dev-check obot-source obot-cli obot-up obot-down
