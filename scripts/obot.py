@@ -287,7 +287,10 @@ def wait_for(state, timeout):
 
 
 def start(name, ref, port=0, timeout=180, image=None, email=EMAIL, docker_socket=None, catalog_test=None):
-    docker_socket = docker_socket or os.environ.get("OBOT_TEST_DOCKER_SOCKET", "/var/run/docker.sock")
+    default_socket = "/var/run/docker.sock"
+    if Path("/etc/discobox/sandbox.json").is_file() and os.environ.get("GITHUB_ACTIONS") != "true":
+        default_socket = "/run/docker.sock"
+    docker_socket = docker_socket or os.environ.get("OBOT_TEST_DOCKER_SOCKET", default_socket)
     if not 0 <= port <= 65535 or timeout <= 0:
         raise SetupError("port must be 0-65535 and timeout must be positive")
     directory = state_path(name).parent

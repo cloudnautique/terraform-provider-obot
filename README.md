@@ -174,8 +174,10 @@ Additional users use the same test password. Available roles are `basic`,
 
 Use `up --port 8080` for a fixed port, or `up --image IMAGE` for a custom
 image. Obot's Docker backend requires its daemon socket during startup.
-The tooling mounts `/var/run/docker.sock`; set `OBOT_TEST_DOCKER_SOCKET`
-or use `up --docker-socket` when the socket path on the Docker host differs.
+Inside Discobox, the tooling mounts `/run/docker.sock:/var/run/docker.sock`.
+Other environments, including GitHub Actions, use
+`/var/run/docker.sock:/var/run/docker.sock`. Set `OBOT_TEST_DOCKER_SOCKET`
+or use `up --docker-socket` to override the socket path on the Docker host.
 
 Inspect failures and remove instances by name:
 

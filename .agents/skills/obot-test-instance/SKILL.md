@@ -49,9 +49,11 @@ has Obot's Owner role, which includes administrative permissions. Set
 the password. Additional test users use that password and the requested role.
 
 The Docker backend requires its daemon socket even for initial startup.
-The tooling mounts `/var/run/docker.sock`; use `--docker-socket` or
-`OBOT_TEST_DOCKER_SOCKET` for another path on the Docker host. These commands
-are for local test instances.
+Inside Discobox, the tooling mounts `/run/docker.sock:/var/run/docker.sock`.
+Other environments, including GitHub Actions, use
+`/var/run/docker.sock:/var/run/docker.sock`. Use `--docker-socket` or
+`OBOT_TEST_DOCKER_SOCKET` to override the socket path on the Docker host.
+These commands are for local test instances.
 
 `python3 scripts/obot.py smoke --ref main --instances 2` checks owner/basic-user
 authentication and isolation, then removes both instances.
