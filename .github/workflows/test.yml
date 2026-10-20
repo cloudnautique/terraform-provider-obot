@@ -9,8 +9,25 @@ permissions:
   contents: read
 
 jobs:
+  # Compiles the provider and its tests before anything slower is set up.
+  # The organization requires a check named build, so it has no display name.
   build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Compile the provider
+        run: go build ./...
+      - name: Compile the tests without running them
+        run: go test -count=1 -run '^$' ./...
+
+  test:
     name: Build, lint, and unit tests
+    needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -30,6 +47,7 @@ jobs:
 
   generate:
     name: Documentation and Terraform smoke checks
+    needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
