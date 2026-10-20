@@ -75,3 +75,28 @@ func TestDisplaySourceURL(t *testing.T) {
 		}
 	}
 }
+
+func TestStripURLCredentials(t *testing.T) {
+	for raw, want := range map[string]struct {
+		url     string
+		secrets []string
+	}{
+		"https://github.com/example/catalog/tree/main/mcp": {"https://github.com/example/catalog/tree/main/mcp", nil},
+		"https://x-access-token:ghp_pw@github.com/example/c.git": {"https://github.com/example/c.git",
+			[]string{"x-access-token:ghp_pw", "x-access-token", "ghp_pw"}},
+		"https://ghp_token@github.com/example/c#mcp": {"https://github.com/example/c#mcp", []string{"ghp_token"}},
+		// Obot's messages repeat the raw, still-encoded form.
+		"https://tok%2Den@github.com/example/c": {"https://github.com/example/c", []string{"tok%2Den", "tok-en"}},
+		// Query values can be working credentials for non-Git sources.
+		"https://gitlab.example/api/v4/raw?private_token=glpat%2Dsecret&ref=main&flag": {
+			"https://gitlab.example/api/v4/raw?private_token=REDACTED&ref=REDACTED&flag",
+			[]string{"glpat%2Dsecret", "glpat-secret", "main"}},
+		"":                 {"", nil},
+		"https://%zz@host": {"https://%zz@host", nil},
+	} {
+		got, secrets := StripURLCredentials(raw)
+		if got != want.url || !slices.Equal(secrets, want.secrets) {
+			t.Errorf("StripURLCredentials(%q) = %q, %q; want %q, %q", raw, got, secrets, want.url, want.secrets)
+		}
+	}
+}

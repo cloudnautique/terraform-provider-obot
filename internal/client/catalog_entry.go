@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
+	"strings"
 )
 
 // HeaderUsage marks catalog entry configuration sent as an HTTP header.
@@ -88,6 +90,60 @@ func DisplaySourceURL(raw string) string {
 	u.User = nil
 	u.RawQuery, u.Fragment = "", ""
 	return u.String()
+}
+
+// StripURLCredentials removes credentials from a source URL before it is
+// shown or stored: userinfo, such as a Git token, and every query value, since
+// Obot fetches non-Git sources with the query intact and a value such as
+// private_token or a presigned signature is a working credential. Query names
+// are kept. It also returns each removed credential, raw and decoded, so
+// callers can scrub them from messages that repeat the URL. A URL that does
+// not parse is returned unchanged; Obot stores only source URLs that parse.
+func StripURLCredentials(raw string) (string, []string) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw, nil
+	}
+	var secrets []string
+	add := func(values ...string) {
+		for _, value := range values {
+			if value != "" && !slices.Contains(secrets, value) {
+				secrets = append(secrets, value)
+			}
+		}
+	}
+	if u.User != nil {
+		// The raw userinfo can be percent-encoded differently from Go's form.
+		if _, authority, ok := strings.Cut(raw, "://"); ok {
+			if end := strings.IndexAny(authority, "/?#"); end >= 0 {
+				authority = authority[:end]
+			}
+			if at := strings.LastIndex(authority, "@"); at >= 0 {
+				user, password, _ := strings.Cut(authority[:at], ":")
+				add(authority[:at], user, password)
+			}
+		}
+		password, _ := u.User.Password()
+		add(u.User.String(), u.User.Username(), password)
+		u.User = nil
+	}
+	if u.RawQuery != "" {
+		pairs := strings.Split(u.RawQuery, "&")
+		for i, pair := range pairs {
+			name, value, ok := strings.Cut(pair, "=")
+			if !ok || value == "" {
+				continue
+			}
+			decoded, err := url.QueryUnescape(value)
+			if err != nil {
+				decoded = value
+			}
+			add(value, decoded)
+			pairs[i] = name + "=REDACTED"
+		}
+		u.RawQuery = strings.Join(pairs, "&")
+	}
+	return u.String(), secrets
 }
 
 // CatalogEntryDefinition is a complete catalog entry. Only Editable entries,
