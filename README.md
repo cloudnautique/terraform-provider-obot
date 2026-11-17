@@ -10,8 +10,10 @@ The provider connects with an API-scoped key and manages MCP tunnels,
 individual default MCP catalog sources, remote MCP catalog entries, Git
 credentials for private sources, and catalog MCP access policies. Read-only data sources expose current
 identity, authentication-provider metadata, tunnel metadata, catalog
-inventory, Git credential IDs, and access policies. It is published on the
-Terraform Registry as [`obot-platform/obot`](https://registry.terraform.io/providers/obot-platform/obot).
+inventory, Git credential IDs, and access policies. It is published as
+`obot-platform/obot` on the
+[Terraform Registry](https://registry.terraform.io/providers/obot-platform/obot)
+and the [OpenTofu Registry](https://search.opentofu.org/provider/obot-platform/obot).
 
 See the [catalog and access-policy guide](docs/guides/catalogs-and-access-policies.md)
 for adding, adopting, and removing catalog sources, looking up the
@@ -46,9 +48,9 @@ data "obot_current_user" "current" {}
 
 The provider requires Terraform 1.0 or later; write-only Git credential tokens
 require Terraform 1.11 or later, and importing by resource identity
-requires Terraform 1.12 or later. OpenTofu works with the same `source`
-address. Releases are tested with Terraform 1.14 and OpenTofu 1.13
-against `main` and the newest patch of each Obot release series listed in
+requires Terraform 1.12 or later. OpenTofu uses the same `source` address.
+Releases are tested with Terraform 1.14 and OpenTofu 1.13 against `main` and
+the newest patch of each Obot release series listed in
 [`obot-versions.json`](obot-versions.json) (currently v0.26, v0.27, and v0.28).
 Use an Owner or Admin API key to manage catalog sources and access policies.
 
@@ -216,10 +218,10 @@ make test-acceptance-fresh OBOT_REF=main OBOT_INSTANCES=2
 make test-acceptance-fresh OBOT_REF=v0.27.0 OBOT_INSTANCES=2
 ```
 
-Targets that start or use a named Obot instance use Terraform by default. Set `OBOT_TF_CLI=tofu`
-to drive OpenTofu instead: acceptance tests then run under `tofu` with the
-`registry.opentofu.org` provider address, and the smoke, end-to-end, upgrade,
-and `NAME-plan` targets call `tofu`:
+Targets that start or use a named Obot instance use Terraform by default.
+Set `OBOT_TF_CLI=tofu` to drive OpenTofu instead: acceptance tests then run
+under `tofu` with the `registry.opentofu.org` provider address, and the smoke,
+end-to-end, upgrade, and `NAME-plan` targets call `tofu`:
 
 ```shell
 make test-acceptance-fresh OBOT_REF=v0.28.0 OBOT_INSTANCES=2 OBOT_TF_CLI=tofu
@@ -272,11 +274,12 @@ For an external instance, set `OBOT_BASE_URL`, `OBOT_TOKEN`, and
 
 `make test-smoke OBOT_INSTANCES=2` creates fresh instances and checks Owner
 and Basic-user login, denied administrative access for Basic users, and
-isolation between instances. With multiple instances it also runs a Terraform plan with the
-compiled provider and aliases, checking each server's distinct identity.
+isolation between instances. With multiple instances it also runs a plan with
+the compiled provider and aliases, checking each server's distinct identity.
 
 The fresh acceptance runner prepares the matching CLI, starts fresh
-instances, runs Terraform acceptance tests, and removes the instances.
+instances, runs the acceptance tests under the CLI `OBOT_TF_CLI` selects, and
+removes the instances.
 Use `python3 scripts/obot.py testacc --ref main --instances 2 --keep` to
 preserve them for diagnosis. Both runners save sanitized logs on failure.
 A custom test command can follow `--`.
@@ -348,9 +351,9 @@ It overrides both `registry.terraform.io/obot-platform/obot` and
 `obot-platform/obot` to its own registry, so the same file works with `tofu`.
 Re-run it after rebuilding or moving the checkout.
 
-Skip `terraform init` for this example: it still attempts to resolve the
-unpublished provider in the Registry. Terraform's development-override warning
-is expected. `make dev-check` checks the schema and validates the configuration
+Skip `terraform init` for this example: development overrides make it
+unnecessary, and it would download the published release, which the override
+then ignores. The development-override warning is expected. `make dev-check` checks the schema and validates the configuration
 without connecting to Obot. Prefer the named Make targets for plan/apply so
 authentication and Terraform state stay associated with the same instance.
 
@@ -472,8 +475,8 @@ finds the release itself.
 Obot changes daily while this repository may not, so
 [`nightly.yml`](.github/workflows/nightly.yml) runs every day at 07:17 UTC,
 and on demand from the Actions tab. The acceptance and end-to-end legs run
-once under Terraform and once under OpenTofu. It needs no secrets: Obot runs in Docker on
-the runner, and issues use the workflow's own `GITHUB_TOKEN`.
+once under Terraform and once under OpenTofu. It needs no secrets: Obot runs in
+Docker on the runner, and issues use the workflow's own `GITHUB_TOKEN`.
 
 | Leg | Versions | What it catches |
 | --- | --- | --- |
