@@ -1,4 +1,4 @@
-## 0.1.0 (Unreleased)
+## 0.1.0 (November 17, 2026)
 
 Initial release.
 
@@ -42,6 +42,8 @@ FEATURES:
 
 NOTES:
 
-- Tested with Terraform 1.14 against Obot v0.26.3 and `main`. Write-only
-  tokens require Terraform 1.11 or later, and importing by resource identity
-  requires Terraform 1.12 or later.
+- Tested with Terraform 1.14 and OpenTofu 1.13 against Obot v0.26, v0.27,
+  v0.28, and `main`. Write-only tokens require Terraform 1.11 or later, and
+  importing by resource identity requires Terraform 1.12 or later.
+- Published to the Terraform Registry and the OpenTofu Registry as
+  `obot-platform/obot`.
