@@ -40,7 +40,9 @@ def run_leg(name, kind, refs, command, out, attempts=2, runner=subprocess.run):
     for attempt in range(1, attempts + 1):
         provenance = out / f"{slug(name)}-attempt{attempt}.provenance.jsonl"
         environment = os.environ.copy()
-        environment["OBOT_TEST_PROVENANCE"] = str(provenance)
+        # Absolute, because a leg's command may run from another directory
+        # (the released-provider leg runs `make -C release`).
+        environment["OBOT_TEST_PROVENANCE"] = str(provenance.resolve())
         if attempt > 1:
             print(f"::warning title={name}::Attempt {attempt - 1} failed; retrying once to separate "
                   "flakes from real breaks", flush=True)
