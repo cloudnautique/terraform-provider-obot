@@ -1,5 +1,6 @@
 """Behavior checks for nightly leg running and reporting; no network is required."""
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -43,6 +44,29 @@ class LegTests(unittest.TestCase):
         result, calls = self.run_leg([1, 0])
         self.assertEqual((result["status"], len(calls)), ("flaky", 2))
         self.assertNotEqual(calls[0], calls[1])
+
+    def test_provenance_is_recorded_when_command_runs_in_another_directory(self):
+        # The released-provider leg runs `make -C release`, so the command
+        # writes OBOT_TEST_PROVENANCE from a different working directory.
+        def runner(command, env):
+            os.chdir("release")
+            try:
+                with open(env["OBOT_TEST_PROVENANCE"], "a") as handle:
+                    handle.write(json.dumps({"ref": "main"}) + "\n")
+            finally:
+                os.chdir("..")
+            return subprocess.CompletedProcess(command, 0)
+
+        cwd = os.getcwd()
+        with tempfile.TemporaryDirectory() as directory:
+            os.chdir(directory)
+            try:
+                os.mkdir("release")
+                result = nightly.run_leg("provider v0.1.0 / main", "released-provider", ["main"],
+                                         ["true"], Path("results"), runner=runner)
+            finally:
+                os.chdir(cwd)
+        self.assertEqual(result["provenance"], [{"ref": "main"}])
 
     def test_two_failures_fail(self):
         result, _ = self.run_leg([1, 1])
